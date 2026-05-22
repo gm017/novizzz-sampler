@@ -740,23 +740,29 @@ function activateHoldCurrent() {
   holdCurrentVoices();
 }
 
-modeButton.addEventListener("pointerdown", (event) => {
-  event.preventDefault();
-  cycleMode();
-});
+function bindPressAction(element, action) {
+  let lastActionTime = 0;
 
-holdCurrentButton.addEventListener("pointerdown", (event) => {
-  event.preventDefault();
-  activateHoldCurrent();
-});
+  const triggerAction = (event) => {
+    event.preventDefault();
+    const now = performance.now();
+    if (now - lastActionTime < 250) {
+      return;
+    }
+    lastActionTime = now;
+    action();
+  };
 
-modeButton.addEventListener("click", (event) => {
-  event.preventDefault();
-});
+  element.addEventListener("pointerdown", triggerAction);
+  element.addEventListener("touchstart", triggerAction, { passive: false });
+  element.addEventListener("mousedown", triggerAction);
+  element.addEventListener("click", (event) => {
+    event.preventDefault();
+  });
+}
 
-holdCurrentButton.addEventListener("click", (event) => {
-  event.preventDefault();
-});
+bindPressAction(modeButton, cycleMode);
+bindPressAction(holdCurrentButton, activateHoldCurrent);
 
 updateOutputLabels();
 renderSampleBank();
