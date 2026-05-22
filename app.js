@@ -45,6 +45,8 @@ const state = {
   liveDelayFeedbackAmount: 0.18,
   liveDelayMixAmount: 0.18,
   liveDistortionAmount: 0.12,
+  liveTremoloSpeedAmount: 0.28,
+  liveTremoloMixAmount: 0.24,
   nextHoldId: 1,
   mode: "free",
 };
@@ -174,8 +176,39 @@ function getTopControlRegions(width) {
     ];
   }
 
-  const usableWidth = Math.max(0, width - inset * 2 - gap * 2);
-  const controlWidth = usableWidth / 3;
+  if (state.topEffectView === "tremolo") {
+    const usableWidth = Math.max(0, width - inset * 2 - gap * 2);
+    const controlWidth = usableWidth / 3;
+    return [
+      {
+        action: "tremolo-back",
+        label: "Back",
+        x: inset,
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+      {
+        action: "tremolo-speed",
+        label: `Speed ${getDisplayedTremoloSpeedAmount().toFixed(2)}`,
+        x: inset + (controlWidth + gap),
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+      {
+        action: "tremolo-mix",
+        label: `Mix ${getDisplayedTremoloMixAmount().toFixed(2)}`,
+        x: inset + (controlWidth + gap) * 2,
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+    ];
+  }
+
+  const usableWidth = Math.max(0, width - inset * 2 - gap * 3);
+  const controlWidth = usableWidth / 4;
 
   return [
     {
@@ -198,6 +231,14 @@ function getTopControlRegions(width) {
       action: "distortion",
       label: `Dist ${getDisplayedDistortionAmount().toFixed(2)}`,
       x: inset + (controlWidth + gap) * 2,
+      y: controlY,
+      width: controlWidth,
+      height: controlHeight,
+    },
+    {
+      action: "tremolo",
+      label: `Trem ${getDisplayedTremoloMixAmount().toFixed(2)}`,
+      x: inset + (controlWidth + gap) * 3,
       y: controlY,
       width: controlWidth,
       height: controlHeight,
@@ -278,6 +319,26 @@ function getDisplayedDistortionAmount() {
     }
   }
   return state.liveDistortionAmount;
+}
+
+function getDisplayedTremoloSpeedAmount() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice) {
+      return voice.tremoloSpeedAmount;
+    }
+  }
+  return state.liveTremoloSpeedAmount;
+}
+
+function getDisplayedTremoloMixAmount() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice) {
+      return voice.tremoloMixAmount;
+    }
+  }
+  return state.liveTremoloMixAmount;
 }
 
 function getDisplayedDelayTimeAmount() {
@@ -418,6 +479,16 @@ function applyVoiceDistortion(voice) {
   const now = Tone.now();
   voice.distortionNode.distortion = voice.distortionAmount * 0.95;
   voice.distortionNode.wet.setValueAtTime(voice.distortionAmount * 0.9, now);
+}
+
+function applyVoiceTremolo(voice) {
+  if (!voice?.tremoloNode) {
+    return;
+  }
+  const now = Tone.now();
+  voice.tremoloNode.frequency.setValueAtTime(0.6 + (voice.tremoloSpeedAmount * 32), now);
+  voice.tremoloNode.depth.setValueAtTime(voice.tremoloMixAmount, now);
+  voice.tremoloNode.wet.setValueAtTime(voice.tremoloMixAmount * 0.95, now);
 }
 
 function getEditableHoldVoice() {
@@ -578,6 +649,52 @@ function setDistortionAmountForTargets(amount) {
   schedulePadDraw();
 }
 
+function setTremoloSpeedAmountForTargets(amount) {
+  const nextAmount = clamp(amount, 0, 1);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice) {
+      return;
+    }
+    selectedVoice.tremoloSpeedAmount = nextAmount;
+    applyVoiceTremolo(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveTremoloSpeedAmount = nextAmount;
+  for (const voice of targets) {
+    voice.tremoloSpeedAmount = nextAmount;
+    applyVoiceTremolo(voice);
+  }
+  schedulePadDraw();
+}
+
+function setTremoloMixAmountForTargets(amount) {
+  const nextAmount = clamp(amount, 0, 1);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice) {
+      return;
+    }
+    selectedVoice.tremoloMixAmount = nextAmount;
+    applyVoiceTremolo(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveTremoloMixAmount = nextAmount;
+  for (const voice of targets) {
+    voice.tremoloMixAmount = nextAmount;
+    applyVoiceTremolo(voice);
+  }
+  schedulePadDraw();
+}
+
 function stopVoiceCollection(collection, key) {
   const voice = collection.get(key);
   if (!voice) {
@@ -594,6 +711,9 @@ function stopVoiceCollection(collection, key) {
   }
   if (voice.distortionNode?.wet) {
     voice.distortionNode.wet.setValueAtTime(0, now);
+  }
+  if (voice.tremoloNode?.wet) {
+    voice.tremoloNode.wet.setValueAtTime(0, now);
   }
   voice.gain.gain.cancelAndHoldAtTime(now);
   voice.gain.gain.linearRampTo(0.0001, 0.05, now);
@@ -629,6 +749,9 @@ function stopSoloVoice() {
   }
   if (state.soloVoice.distortionNode?.wet) {
     state.soloVoice.distortionNode.wet.setValueAtTime(0, now);
+  }
+  if (state.soloVoice.tremoloNode?.wet) {
+    state.soloVoice.tremoloNode.wet.setValueAtTime(0, now);
   }
   state.soloVoice.gain.gain.cancelAndHoldAtTime(now);
   state.soloVoice.gain.gain.linearRampTo(0.0001, 0.05, now);
@@ -669,23 +792,32 @@ function createVoice(pointerPosition, options = {}) {
     feedback: 0.12,
     wet: 0,
   });
+  const tremoloNode = new Tone.Tremolo({
+    frequency: 4,
+    depth: 0,
+    spread: 0,
+    wet: 0,
+  });
   const gain = new Tone.Gain(0.0001);
   modOsc.connect(modGain);
   modGain.connect(source.playbackRate);
   source.connect(distortionNode);
   distortionNode.connect(delayNode);
-  delayNode.connect(gain);
+  delayNode.connect(tremoloNode);
+  tremoloNode.connect(gain);
   gain.connect(state.masterGain);
   source.onended = () => {
     modOsc.dispose();
     modGain.dispose();
     distortionNode.dispose();
     delayNode.dispose();
+    tremoloNode.dispose();
     source.dispose();
     gain.dispose();
   };
 
   modOsc.start();
+  tremoloNode.start();
   gain.gain.linearRampTo(0.9, 0.01);
   source.start(Tone.now(), offset);
 
@@ -697,6 +829,7 @@ function createVoice(pointerPosition, options = {}) {
     gain,
     distortionNode,
     delayNode,
+    tremoloNode,
     modOsc,
     modGain,
     pointerPosition,
@@ -706,10 +839,13 @@ function createVoice(pointerPosition, options = {}) {
     delayFeedbackAmount: state.liveDelayFeedbackAmount,
     delayMixAmount: state.liveDelayMixAmount,
     distortionAmount: state.liveDistortionAmount,
+    tremoloSpeedAmount: state.liveTremoloSpeedAmount,
+    tremoloMixAmount: state.liveTremoloMixAmount,
   };
   applyVoiceMetal(voice);
   applyVoiceDelay(voice);
   applyVoiceDistortion(voice);
+  applyVoiceTremolo(voice);
 
   return voice;
 }
@@ -951,6 +1087,28 @@ async function handlePadDown(pointerId, position, options = {}) {
         1,
       );
       setDistortionAmountForTargets(amount);
+    } else if (controlAction.action === "tremolo") {
+      state.topEffectView = "tremolo";
+      schedulePadDraw();
+    } else if (controlAction.action === "tremolo-back") {
+      state.topEffectView = "main";
+      schedulePadDraw();
+    } else if (controlAction.action === "tremolo-speed") {
+      state.controlDragByPointer.set(pointerId, "tremolo-speed");
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setTremoloSpeedAmountForTargets(amount);
+    } else if (controlAction.action === "tremolo-mix") {
+      state.controlDragByPointer.set(pointerId, "tremolo-mix");
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setTremoloMixAmountForTargets(amount);
     }
     return;
   }
@@ -1049,6 +1207,10 @@ function handlePadMove(pointerId, position) {
         setDelayMixAmountForTargets(amount);
       } else if (draggedControl === "distortion") {
         setDistortionAmountForTargets(amount);
+      } else if (draggedControl === "tremolo-speed") {
+        setTremoloSpeedAmountForTargets(amount);
+      } else if (draggedControl === "tremolo-mix") {
+        setTremoloMixAmountForTargets(amount);
       }
     }
     return;
@@ -1237,9 +1399,12 @@ function drawPad() {
       control.action === "metal"
       || control.action === "delay"
       || control.action === "distortion"
+      || control.action === "tremolo"
       || control.action === "delay-time"
       || control.action === "delay-feedback"
       || control.action === "delay-mix"
+      || control.action === "tremolo-speed"
+      || control.action === "tremolo-mix"
     ) {
       let amount = 0;
       if (control.action === "metal") {
@@ -1254,6 +1419,12 @@ function drawPad() {
         amount = getDisplayedDelayMixAmount();
       } else if (control.action === "distortion") {
         amount = getDisplayedDistortionAmount();
+      } else if (control.action === "tremolo") {
+        amount = getDisplayedTremoloMixAmount();
+      } else if (control.action === "tremolo-speed") {
+        amount = getDisplayedTremoloSpeedAmount();
+      } else if (control.action === "tremolo-mix") {
+        amount = getDisplayedTremoloMixAmount();
       }
       ctx.fillStyle = "#000";
       ctx.fillRect(control.x + 4, control.y + control.height - 10, (control.width - 8) * amount, 6);
@@ -1266,6 +1437,61 @@ function drawPad() {
       );
       ctx.strokeStyle = "#000";
       ctx.strokeRect(control.x + 4, control.y + control.height - 10, control.width - 8, 6);
+    }
+
+    if (control.action === "delay") {
+      const miniBarY = control.y + control.height - 22;
+      const miniBarHeight = 4;
+      const miniGap = 6;
+      const miniWidth = (control.width - 8 - miniGap * 2) / 3;
+      const miniX = control.x + 4;
+      const delayValues = [
+        getDisplayedDelayTimeAmount(),
+        getDisplayedDelayFeedbackAmount(),
+        getDisplayedDelayMixAmount(),
+      ];
+
+      delayValues.forEach((value, index) => {
+        const x = miniX + index * (miniWidth + miniGap);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(x, miniBarY, miniWidth * value, miniBarHeight);
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(
+          x + miniWidth * value,
+          miniBarY,
+          Math.max(0, miniWidth - miniWidth * value),
+          miniBarHeight,
+        );
+        ctx.strokeStyle = "#000";
+        ctx.strokeRect(x, miniBarY, miniWidth, miniBarHeight);
+      });
+    }
+
+    if (control.action === "tremolo") {
+      const miniBarY = control.y + control.height - 22;
+      const miniBarHeight = 4;
+      const miniGap = 6;
+      const miniWidth = (control.width - 8 - miniGap) / 2;
+      const miniX = control.x + 4;
+      const tremoloValues = [
+        getDisplayedTremoloSpeedAmount(),
+        getDisplayedTremoloMixAmount(),
+      ];
+
+      tremoloValues.forEach((value, index) => {
+        const x = miniX + index * (miniWidth + miniGap);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(x, miniBarY, miniWidth * value, miniBarHeight);
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(
+          x + miniWidth * value,
+          miniBarY,
+          Math.max(0, miniWidth - miniWidth * value),
+          miniBarHeight,
+        );
+        ctx.strokeStyle = "#000";
+        ctx.strokeRect(x, miniBarY, miniWidth, miniBarHeight);
+      });
     }
 
     ctx.fillStyle = "#000";
