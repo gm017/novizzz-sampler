@@ -585,8 +585,19 @@ function stopVoiceCollection(collection, key) {
   }
 
   const now = Tone.now();
+  if (voice.modGain) {
+    voice.modGain.gain.setValueAtTime(0, now);
+  }
+  if (voice.delayNode) {
+    voice.delayNode.feedback.setValueAtTime(0, now);
+    voice.delayNode.wet.setValueAtTime(0, now);
+  }
+  if (voice.distortionNode?.wet) {
+    voice.distortionNode.wet.setValueAtTime(0, now);
+  }
   voice.gain.gain.cancelAndHoldAtTime(now);
   voice.gain.gain.linearRampTo(0.0001, 0.05, now);
+  voice.source.loop = false;
   voice.source.stop(now + 0.06);
   collection.delete(key);
   if (collection === state.holdVoices && state.selectedHoldId === key) {
@@ -609,8 +620,19 @@ function stopSoloVoice() {
   }
 
   const now = Tone.now();
+  if (state.soloVoice.modGain) {
+    state.soloVoice.modGain.gain.setValueAtTime(0, now);
+  }
+  if (state.soloVoice.delayNode) {
+    state.soloVoice.delayNode.feedback.setValueAtTime(0, now);
+    state.soloVoice.delayNode.wet.setValueAtTime(0, now);
+  }
+  if (state.soloVoice.distortionNode?.wet) {
+    state.soloVoice.distortionNode.wet.setValueAtTime(0, now);
+  }
   state.soloVoice.gain.gain.cancelAndHoldAtTime(now);
   state.soloVoice.gain.gain.linearRampTo(0.0001, 0.05, now);
+  state.soloVoice.source.loop = false;
   state.soloVoice.source.stop(now + 0.06);
   state.soloVoice = null;
   schedulePadDraw();
@@ -726,7 +748,7 @@ function updateVoicePitch(voice, pointerPosition) {
     return;
   }
 
-  if (pointerPosition.y > getPlayableHeight(pointerPosition.height)) {
+  if (pointerPosition.y > getPlayableTop() + getPlayableHeight(pointerPosition.height)) {
     return;
   }
   if (pointerPosition.y < getPlayableTop()) {
