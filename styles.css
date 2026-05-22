@@ -21,16 +21,10 @@ body {
   font: inherit;
 }
 
-.mode-controls {
-  display: flex;
-  gap: 12px;
+#modeButton {
+  display: block;
   margin-top: 16px;
-}
-
-#modeButton,
-#holdCurrentButton {
   font: inherit;
-  touch-action: manipulation;
 }
 
 #audioStatus {

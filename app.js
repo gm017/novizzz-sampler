@@ -6,7 +6,6 @@ const sampleList = document.getElementById("sampleList");
 const voiceReadout = document.getElementById("voiceReadout");
 const toggleUiButton = document.getElementById("toggleUiButton");
 const modeButton = document.getElementById("modeButton");
-const holdCurrentButton = document.getElementById("holdCurrentButton");
 
 const controls = {
   sliceMin: document.getElementById("sliceMin"),
@@ -121,12 +120,6 @@ function randomBetween(min, max) {
   return min + Math.random() * (max - min);
 }
 
-function getNextHoldId() {
-  const holdId = state.nextHoldId;
-  state.nextHoldId += 1;
-  return holdId;
-}
-
 function initAudio() {
   if (!state.masterGain) {
     state.masterGain = new Tone.Gain(0.9).toDestination();
@@ -221,8 +214,9 @@ function stopSoloVoice() {
   drawPad();
 }
 
-function buildVoiceSpec(pointerPosition, sample = chooseRandomSample()) {
-  if (!sample) {
+function createVoice(pointerPosition, options = {}) {
+  const sample = chooseRandomSample();
+  if (!sample || !state.masterGain) {
     return null;
   }
 
@@ -233,26 +227,12 @@ function buildVoiceSpec(pointerPosition, sample = chooseRandomSample()) {
   const offset = maxOffset > 0 ? Math.random() * maxOffset : 0;
   const grid = getGridPosition(pointerPosition);
 
-  return {
-    sample,
-    pointerPosition,
-    offset,
+  const source = new Tone.ToneBufferSource({
+    url: sample.buffer,
+    loop: true,
+    loopStart: offset,
     loopEnd: Math.min(sample.buffer.duration, offset + duration),
     playbackRate: grid.pitchRatio,
-  };
-}
-
-function createVoiceFromSpec(spec, options = {}) {
-  if (!spec || !state.masterGain) {
-    return null;
-  }
-
-  const source = new Tone.ToneBufferSource({
-    url: spec.sample.buffer,
-    loop: true,
-    loopStart: spec.offset,
-    loopEnd: spec.loopEnd,
-    playbackRate: spec.playbackRate,
   });
   const gain = new Tone.Gain(0.0001).connect(state.masterGain);
   source.connect(gain);
@@ -267,18 +247,11 @@ function createVoiceFromSpec(spec, options = {}) {
   return {
     id: options.id ?? null,
     isHeld: Boolean(options.isHeld),
-    sample: spec.sample,
+    sample,
     source,
     gain,
-    pointerPosition: { ...spec.pointerPosition },
-    offset: spec.offset,
-    loopEnd: spec.loopEnd,
+    pointerPosition,
   };
-}
-
-function createVoice(pointerPosition, options = {}) {
-  const spec = buildVoiceSpec(pointerPosition);
-  return createVoiceFromSpec(spec, options);
 }
 
 function storeTransientVoice(pointerId, pointerPosition) {
@@ -302,7 +275,8 @@ function startSoloVoice(pointerPosition) {
 }
 
 function createHoldVoice(pointerPosition) {
-  const holdId = getNextHoldId();
+  const holdId = state.nextHoldId;
+  state.nextHoldId += 1;
   const voice = createVoice(pointerPosition, { id: holdId, isHeld: true });
   if (!voice) {
     return null;
@@ -324,41 +298,6 @@ function updateVoicePitch(voice, pointerPosition) {
   voice.source.playbackRate.linearRampTo(grid.pitchRatio, 0.03);
   updateVoiceReadout();
   drawPad();
-}
-
-function promoteVoiceToHold(voice) {
-  if (!voice) {
-    return null;
-  }
-
-  const holdId = getNextHoldId();
-  voice.id = holdId;
-  voice.isHeld = true;
-  state.holdVoices.set(holdId, voice);
-  return holdId;
-}
-
-function holdCurrentVoices() {
-  let didHoldVoice = false;
-
-  for (const [pointerId, voice] of state.transientVoices.entries()) {
-    state.transientVoices.delete(pointerId);
-    promoteVoiceToHold(voice);
-    didHoldVoice = true;
-  }
-
-  if (state.soloVoice) {
-    promoteVoiceToHold(state.soloVoice);
-    state.soloVoice = null;
-    state.soloPointers.clear();
-    state.soloLeadPointerId = null;
-    didHoldVoice = true;
-  }
-
-  if (didHoldVoice) {
-    updateVoiceReadout();
-    drawPad();
-  }
 }
 
 function findHoldVoiceAtPosition(pointerPosition) {
@@ -736,33 +675,7 @@ function cycleMode() {
   stopSoloVoice();
 }
 
-function activateHoldCurrent() {
-  holdCurrentVoices();
-}
-
-function bindPressAction(element, action) {
-  let lastActionTime = 0;
-
-  const triggerAction = (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const now = performance.now();
-    if (now - lastActionTime < 250) {
-      return;
-    }
-    lastActionTime = now;
-    action();
-  };
-
-  element.addEventListener("touchstart", triggerAction, { passive: false });
-  element.addEventListener("mousedown", triggerAction);
-  element.addEventListener("click", (event) => {
-    event.preventDefault();
-  });
-}
-
-bindPressAction(modeButton, cycleMode);
-bindPressAction(holdCurrentButton, activateHoldCurrent);
+modeButton.addEventListener("click", cycleMode);
 
 updateOutputLabels();
 renderSampleBank();
