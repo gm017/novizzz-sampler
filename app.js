@@ -33,6 +33,9 @@ const state = {
   holdVoices: new Map(),
   holdDragByPointer: new Map(),
   holdGestureByPointer: new Map(),
+  soloVoice: null,
+  soloPointers: new Map(),
+  soloLeadPointerId: null,
   lastHoldTap: null,
   nextHoldId: 1,
   mode: "free",
@@ -164,6 +167,7 @@ function renderSampleBank() {
 
 function getAllVoices() {
   return [
+    ...(state.soloVoice ? [state.soloVoice] : []),
     ...state.holdVoices.values(),
     ...state.transientVoices.values(),
   ];
@@ -205,6 +209,21 @@ function stopTransientVoice(pointerId) {
 
 function stopHoldVoice(holdId) {
   stopVoiceCollection(state.holdVoices, holdId);
+}
+
+function stopSoloVoice() {
+  if (!state.soloVoice || !state.audioContext) {
+    return;
+  }
+
+  const now = state.audioContext.currentTime;
+  state.soloVoice.gain.gain.cancelScheduledValues(now);
+  state.soloVoice.gain.gain.setValueAtTime(state.soloVoice.gain.gain.value, now);
+  state.soloVoice.gain.gain.linearRampToValueAtTime(0.0001, now + 0.08);
+  state.soloVoice.source.stop(now + 0.09);
+  state.soloVoice = null;
+  updateVoiceReadout();
+  drawPad();
 }
 
 function createVoice(pointerPosition, options = {}) {
@@ -255,6 +274,16 @@ function storeTransientVoice(pointerId, pointerPosition) {
   drawPad();
 }
 
+function startSoloVoice(pointerPosition) {
+  const voice = createVoice(pointerPosition, { isHeld: false });
+  if (!voice) {
+    return;
+  }
+  state.soloVoice = voice;
+  updateVoiceReadout();
+  drawPad();
+}
+
 function createHoldVoice(pointerPosition) {
   const holdId = state.nextHoldId;
   state.nextHoldId += 1;
@@ -297,6 +326,23 @@ function findHoldVoiceAtPosition(pointerPosition) {
 
 function getPointerDistance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function getLastSoloPointerId(excludePointerId = null) {
+  let nextPointerId = null;
+  let lastTime = -1;
+
+  for (const [pointerId, pointerState] of state.soloPointers.entries()) {
+    if (pointerId === excludePointerId) {
+      continue;
+    }
+    if (pointerState.startedAt > lastTime) {
+      lastTime = pointerState.startedAt;
+      nextPointerId = pointerId;
+    }
+  }
+
+  return nextPointerId;
 }
 
 function drawPad() {
@@ -356,6 +402,18 @@ function drawPad() {
     ctx.arc(x, y, 10, 0, Math.PI * 2);
     ctx.fill();
   }
+
+  if (state.soloVoice) {
+    const { x, y } = state.soloVoice.pointerPosition;
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.arc(x, y, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 async function loadSamples(files) {
@@ -405,6 +463,22 @@ canvas.addEventListener("pointerdown", async (event) => {
   const position = getPointerPosition(event);
   canvas.setPointerCapture(event.pointerId);
 
+  if (state.mode === "solo") {
+    state.soloPointers.set(event.pointerId, {
+      position,
+      startedAt: performance.now(),
+    });
+    state.soloLeadPointerId = event.pointerId;
+
+    if (!state.soloVoice) {
+      startSoloVoice(position);
+      return;
+    }
+
+    updateVoicePitch(state.soloVoice, position);
+    return;
+  }
+
   if (state.mode === "hold") {
     const existingHoldId = findHoldVoiceAtPosition(position);
     if (existingHoldId !== null) {
@@ -442,6 +516,18 @@ canvas.addEventListener("pointermove", (event) => {
   event.preventDefault();
   const position = getPointerPosition(event);
 
+  if (state.mode === "solo") {
+    const pointerState = state.soloPointers.get(event.pointerId);
+    if (!pointerState) {
+      return;
+    }
+    pointerState.position = position;
+    if (state.soloLeadPointerId === event.pointerId && state.soloVoice) {
+      updateVoicePitch(state.soloVoice, position);
+    }
+    return;
+  }
+
   if (state.mode === "hold") {
     const gesture = state.holdGestureByPointer.get(event.pointerId);
     if (gesture) {
@@ -469,6 +555,25 @@ canvas.addEventListener("pointermove", (event) => {
 });
 
 canvas.addEventListener("pointerup", (event) => {
+  if (state.mode === "solo") {
+    state.soloPointers.delete(event.pointerId);
+
+    if (!state.soloPointers.size) {
+      state.soloLeadPointerId = null;
+      stopSoloVoice();
+      return;
+    }
+
+    if (state.soloLeadPointerId === event.pointerId) {
+      state.soloLeadPointerId = getLastSoloPointerId(event.pointerId);
+      const pointerState = state.soloPointers.get(state.soloLeadPointerId);
+      if (pointerState && state.soloVoice) {
+        updateVoicePitch(state.soloVoice, pointerState.position);
+      }
+    }
+    return;
+  }
+
   if (state.mode === "hold") {
     const gesture = state.holdGestureByPointer.get(event.pointerId);
     state.holdDragByPointer.delete(event.pointerId);
@@ -500,6 +605,25 @@ canvas.addEventListener("pointerup", (event) => {
 });
 
 canvas.addEventListener("pointercancel", (event) => {
+  if (state.mode === "solo") {
+    state.soloPointers.delete(event.pointerId);
+
+    if (!state.soloPointers.size) {
+      state.soloLeadPointerId = null;
+      stopSoloVoice();
+      return;
+    }
+
+    if (state.soloLeadPointerId === event.pointerId) {
+      state.soloLeadPointerId = getLastSoloPointerId(event.pointerId);
+      const pointerState = state.soloPointers.get(state.soloLeadPointerId);
+      if (pointerState && state.soloVoice) {
+        updateVoicePitch(state.soloVoice, pointerState.position);
+      }
+    }
+    return;
+  }
+
   if (state.mode === "hold") {
     state.holdDragByPointer.delete(event.pointerId);
     state.holdGestureByPointer.delete(event.pointerId);
@@ -509,6 +633,27 @@ canvas.addEventListener("pointercancel", (event) => {
 });
 
 canvas.addEventListener("pointerleave", (event) => {
+  if (state.mode === "solo") {
+    if (event.buttons === 0) {
+      state.soloPointers.delete(event.pointerId);
+
+      if (!state.soloPointers.size) {
+        state.soloLeadPointerId = null;
+        stopSoloVoice();
+        return;
+      }
+
+      if (state.soloLeadPointerId === event.pointerId) {
+        state.soloLeadPointerId = getLastSoloPointerId(event.pointerId);
+        const pointerState = state.soloPointers.get(state.soloLeadPointerId);
+        if (pointerState && state.soloVoice) {
+          updateVoicePitch(state.soloVoice, pointerState.position);
+        }
+      }
+    }
+    return;
+  }
+
   if (state.mode === "hold") {
     if (event.buttons === 0) {
       state.holdDragByPointer.delete(event.pointerId);
@@ -529,10 +674,20 @@ toggleUiButton.addEventListener("click", () => {
 });
 
 modeButton.addEventListener("click", () => {
-  state.mode = state.mode === "free" ? "hold" : "free";
-  modeButton.textContent = state.mode === "free" ? "Mode: Free" : "Mode: Hold";
+  if (state.mode === "free") {
+    state.mode = "hold";
+  } else if (state.mode === "hold") {
+    state.mode = "solo";
+  } else {
+    state.mode = "free";
+  }
+
+  modeButton.textContent = `Mode: ${state.mode.charAt(0).toUpperCase()}${state.mode.slice(1)}`;
   state.holdDragByPointer.clear();
   state.holdGestureByPointer.clear();
+  state.soloPointers.clear();
+  state.soloLeadPointerId = null;
+  stopSoloVoice();
 });
 
 updateOutputLabels();
