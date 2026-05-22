@@ -1591,6 +1591,8 @@ function cycleMode() {
   state.holdGestureByPointer.clear();
   state.soloPointers.clear();
   state.soloLeadPointerId = null;
+  state.interactionMode = "play";
+  state.selectedHoldId = null;
   state.topEffectView = "main";
   stopSoloVoice();
   state.padBackgroundCanvas = null;
