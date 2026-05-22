@@ -36,7 +36,6 @@ const state = {
   soloPointers: new Map(),
   soloLeadPointerId: null,
   lastHoldTap: null,
-  controlDragByPointer: new Map(),
   interactionMode: "play",
   selectedHoldId: null,
   liveMetalAmount: 0.35,
@@ -46,7 +45,8 @@ const state = {
 
 const canvas = touchPad;
 const ctx = canvas.getContext("2d");
-const CONTROL_LANE_HEIGHT = 72;
+const TOP_CONTROL_LANE_HEIGHT = 72;
+const BOTTOM_CONTROL_LANE_HEIGHT = 72;
 
 function getNextHoldId() {
   const holdId = state.nextHoldId;
@@ -114,18 +114,40 @@ function getPointerPosition(event) {
 }
 
 function getPlayableHeight(height) {
-  return Math.max(1, height - CONTROL_LANE_HEIGHT);
+  return Math.max(1, height - TOP_CONTROL_LANE_HEIGHT - BOTTOM_CONTROL_LANE_HEIGHT);
 }
 
-function getControlRegions(width, height) {
-  const laneTop = getPlayableHeight(height);
-  const laneHeight = height - laneTop;
-  const gap = 10;
+function getPlayableTop() {
+  return TOP_CONTROL_LANE_HEIGHT;
+}
+
+function getTopControlRegions(width) {
+  const laneTop = 0;
+  const laneHeight = TOP_CONTROL_LANE_HEIGHT;
   const inset = 14;
-  const usableWidth = Math.max(0, width - inset * 2 - gap * 3);
-  const unitWidth = usableWidth / 6;
-  const buttonWidth = unitWidth;
-  const sliderWidth = unitWidth * 3;
+  const usableWidth = Math.max(0, width - inset * 2);
+  const controlY = laneTop + 10;
+  const controlHeight = Math.max(28, laneHeight - 20);
+
+  return [
+    {
+      action: "metal",
+      label: `Metal ${getDisplayedMetalAmount().toFixed(2)}`,
+      x: inset,
+      y: controlY,
+      width: usableWidth,
+      height: controlHeight,
+    },
+  ];
+}
+
+function getBottomControlRegions(width, height) {
+  const laneTop = height - BOTTOM_CONTROL_LANE_HEIGHT;
+  const laneHeight = BOTTOM_CONTROL_LANE_HEIGHT;
+  const gap = 12;
+  const inset = 14;
+  const usableWidth = Math.max(0, width - inset * 2 - gap * 2);
+  const buttonWidth = usableWidth / 3;
   const controlY = laneTop + 10;
   const controlHeight = Math.max(28, laneHeight - 20);
 
@@ -154,19 +176,14 @@ function getControlRegions(width, height) {
       width: buttonWidth,
       height: controlHeight,
     },
-    {
-      action: "metal",
-      label: `Metal ${getDisplayedMetalAmount().toFixed(2)}`,
-      x: inset + (buttonWidth + gap) * 3,
-      y: controlY,
-      width: sliderWidth,
-      height: controlHeight,
-    },
   ];
 }
 
 function getControlActionAtPosition(pointerPosition) {
-  const controlsInPad = getControlRegions(pointerPosition.width, pointerPosition.height);
+  const controlsInPad = [
+    ...getTopControlRegions(pointerPosition.width),
+    ...getBottomControlRegions(pointerPosition.width, pointerPosition.height),
+  ];
   return controlsInPad.find((control) => (
     pointerPosition.x >= control.x
     && pointerPosition.x <= control.x + control.width
@@ -185,16 +202,12 @@ function getDisplayedMetalAmount() {
   return state.liveMetalAmount;
 }
 
-function getMetalAmountForControlPosition(pointerPosition, control) {
-  const normalized = clamp((pointerPosition.x - control.x) / Math.max(1, control.width), 0, 1);
-  return normalized;
-}
-
 function getGridPosition({ x, y, width, height }) {
   const { rows, cols, edoSteps, pitchSpread } = getGridConfig();
   const playableHeight = getPlayableHeight(height);
+  const playableTop = getPlayableTop();
   const rowHeight = playableHeight / rows;
-  const normalizedRow = clamp(y / rowHeight, 0, rows - 1e-6);
+  const normalizedRow = clamp((y - playableTop) / rowHeight, 0, rows - 1e-6);
   const row = Math.floor(normalizedRow);
   const xNorm = clamp(x / width, 0, 1);
   const totalCells = rows * cols;
@@ -455,6 +468,9 @@ function updateVoicePitch(voice, pointerPosition) {
   if (pointerPosition.y > getPlayableHeight(pointerPosition.height)) {
     return;
   }
+  if (pointerPosition.y < getPlayableTop()) {
+    return;
+  }
 
   const grid = getGridPosition(pointerPosition);
   voice.pointerPosition = pointerPosition;
@@ -520,6 +536,7 @@ function renderStaticPadBackground() {
   const width = Math.max(1, Math.round(bounds.width));
   const height = Math.max(1, Math.round(bounds.height));
   const playableHeight = getPlayableHeight(height);
+  const playableTop = getPlayableTop();
   const rowHeight = playableHeight / rows;
   const colWidth = width / cols;
 
@@ -534,7 +551,7 @@ function renderStaticPadBackground() {
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
       backgroundCtx.strokeStyle = "#000";
-      backgroundCtx.strokeRect(col * colWidth, row * rowHeight, colWidth, rowHeight);
+      backgroundCtx.strokeRect(col * colWidth, playableTop + row * rowHeight, colWidth, rowHeight);
     }
   }
 
@@ -542,7 +559,7 @@ function renderStaticPadBackground() {
   backgroundCtx.strokeStyle = "#000";
   backgroundCtx.beginPath();
   for (let row = 0; row < rows; row += 1) {
-    const y = row * rowHeight + rowHeight / 2;
+    const y = playableTop + row * rowHeight + rowHeight / 2;
     if (row === 0) {
       backgroundCtx.moveTo(0, y);
     } else {
@@ -553,9 +570,11 @@ function renderStaticPadBackground() {
   backgroundCtx.stroke();
 
   backgroundCtx.fillStyle = "#f1f1f1";
-  backgroundCtx.fillRect(0, playableHeight, width, height - playableHeight);
+  backgroundCtx.fillRect(0, 0, width, playableTop);
+  backgroundCtx.fillRect(0, playableTop + playableHeight, width, height - playableTop - playableHeight);
   backgroundCtx.strokeStyle = "#000";
-  backgroundCtx.strokeRect(0, playableHeight, width, height - playableHeight);
+  backgroundCtx.strokeRect(0, 0, width, playableTop);
+  backgroundCtx.strokeRect(0, playableTop + playableHeight, width, height - playableTop - playableHeight);
 
   state.padBackgroundCanvas = backgroundCanvas;
 }
@@ -604,8 +623,14 @@ async function handlePadDown(pointerId, position, options = {}) {
     } else if (controlAction.action === "edit-held") {
       toggleEditHeldMode();
     } else if (controlAction.action === "metal") {
+      state.controlDragByPointer ??= new Map();
       state.controlDragByPointer.set(pointerId, "metal");
-      setMetalAmountForTargets(getMetalAmountForControlPosition(position, controlAction));
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setMetalAmountForTargets(amount);
     }
     return;
   }
@@ -616,6 +641,7 @@ async function handlePadDown(pointerId, position, options = {}) {
       selectHeldVoice(holdId);
     } else {
       state.selectedHoldId = null;
+      updateOutputLabels();
       schedulePadDraw();
     }
     return;
@@ -683,12 +709,15 @@ async function handlePadDown(pointerId, position, options = {}) {
 }
 
 function handlePadMove(pointerId, position) {
-  const activeControl = state.controlDragByPointer.get(pointerId);
-  if (activeControl === "metal") {
-    const metalControl = getControlRegions(position.width, position.height)
-      .find((control) => control.action === "metal");
+  if (state.controlDragByPointer?.get(pointerId) === "metal") {
+    const metalControl = getTopControlRegions(position.width).find((control) => control.action === "metal");
     if (metalControl) {
-      setMetalAmountForTargets(getMetalAmountForControlPosition(position, metalControl));
+      const amount = clamp(
+        (position.x - metalControl.x) / Math.max(1, metalControl.width),
+        0,
+        1,
+      );
+      setMetalAmountForTargets(amount);
     }
     return;
   }
@@ -732,7 +761,7 @@ function handlePadMove(pointerId, position) {
 }
 
 function handlePadUp(pointerId, buttons = 0) {
-  state.controlDragByPointer.delete(pointerId);
+  state.controlDragByPointer?.delete(pointerId);
 
   if (state.mode === "solo") {
     state.soloPointers.delete(pointerId);
@@ -787,7 +816,7 @@ function handlePadUp(pointerId, buttons = 0) {
 }
 
 function handlePadCancel(pointerId) {
-  state.controlDragByPointer.delete(pointerId);
+  state.controlDragByPointer?.delete(pointerId);
 
   if (state.mode === "solo") {
     state.soloPointers.delete(pointerId);
@@ -818,7 +847,7 @@ function handlePadCancel(pointerId) {
 }
 
 function handlePadLeave(pointerId, buttons = 0) {
-  if (state.controlDragByPointer.has(pointerId)) {
+  if (state.controlDragByPointer?.has(pointerId)) {
     if (buttons === 0) {
       state.controlDragByPointer.delete(pointerId);
     }
@@ -859,13 +888,14 @@ function drawPad() {
   ctx.clearRect(0, 0, width, height);
   ctx.drawImage(state.padBackgroundCanvas, 0, 0, width, height);
 
-  const controlRegions = getControlRegions(width, height);
+  const topControlRegions = getTopControlRegions(width);
+  const bottomControlRegions = getBottomControlRegions(width, height);
   ctx.font = '16px "Times New Roman", Times, serif';
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  for (const control of controlRegions) {
-    const isActiveEditButton = control.action === "edit-held" && state.interactionMode === "edit";
-    ctx.fillStyle = isActiveEditButton ? "#ddd" : "#fff";
+  for (const control of [...topControlRegions, ...bottomControlRegions]) {
+    const isActiveEdit = control.action === "edit-held" && state.interactionMode === "edit";
+    ctx.fillStyle = isActiveEdit ? "#ddd" : "#fff";
     ctx.strokeStyle = "#000";
     ctx.lineWidth = 1;
     ctx.fillRect(control.x, control.y, control.width, control.height);
@@ -876,8 +906,12 @@ function drawPad() {
       ctx.fillStyle = "#000";
       ctx.fillRect(control.x + 4, control.y + control.height - 10, (control.width - 8) * amount, 6);
       ctx.fillStyle = "#fff";
-      ctx.fillRect(control.x + 4 + (control.width - 8) * amount, control.y + control.height - 10,
-        Math.max(0, control.width - 8 - (control.width - 8) * amount), 6);
+      ctx.fillRect(
+        control.x + 4 + (control.width - 8) * amount,
+        control.y + control.height - 10,
+        Math.max(0, control.width - 8 - (control.width - 8) * amount),
+        6,
+      );
       ctx.strokeStyle = "#000";
       ctx.strokeRect(control.x + 4, control.y + control.height - 10, control.width - 8, 6);
     }
@@ -1044,6 +1078,7 @@ function cycleMode() {
   state.soloLeadPointerId = null;
   stopSoloVoice();
   state.padBackgroundCanvas = null;
+  updateOutputLabels();
   schedulePadDraw();
 }
 
