@@ -27,6 +27,7 @@ const state = {
   masterGain: null,
   padBackgroundCanvas: null,
   drawScheduled: false,
+  controlDragByPointer: new Map(),
   samples: [],
   transientVoices: new Map(),
   holdVoices: new Map(),
@@ -39,6 +40,8 @@ const state = {
   interactionMode: "play",
   selectedHoldId: null,
   liveMetalAmount: 0.35,
+  liveDelayAmount: 0.18,
+  liveDistortionAmount: 0.12,
   nextHoldId: 1,
   mode: "free",
 };
@@ -125,7 +128,9 @@ function getTopControlRegions(width) {
   const laneTop = 0;
   const laneHeight = TOP_CONTROL_LANE_HEIGHT;
   const inset = 14;
-  const usableWidth = Math.max(0, width - inset * 2);
+  const gap = 10;
+  const usableWidth = Math.max(0, width - inset * 2 - gap * 2);
+  const controlWidth = usableWidth / 3;
   const controlY = laneTop + 10;
   const controlHeight = Math.max(28, laneHeight - 20);
 
@@ -135,7 +140,23 @@ function getTopControlRegions(width) {
       label: `Metal ${getDisplayedMetalAmount().toFixed(2)}`,
       x: inset,
       y: controlY,
-      width: usableWidth,
+      width: controlWidth,
+      height: controlHeight,
+    },
+    {
+      action: "delay",
+      label: `Delay ${getDisplayedDelayAmount().toFixed(2)}`,
+      x: inset + controlWidth + gap,
+      y: controlY,
+      width: controlWidth,
+      height: controlHeight,
+    },
+    {
+      action: "distortion",
+      label: `Dist ${getDisplayedDistortionAmount().toFixed(2)}`,
+      x: inset + (controlWidth + gap) * 2,
+      y: controlY,
+      width: controlWidth,
       height: controlHeight,
     },
   ];
@@ -200,6 +221,26 @@ function getDisplayedMetalAmount() {
     }
   }
   return state.liveMetalAmount;
+}
+
+function getDisplayedDelayAmount() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice) {
+      return voice.delayAmount;
+    }
+  }
+  return state.liveDelayAmount;
+}
+
+function getDisplayedDistortionAmount() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice) {
+      return voice.distortionAmount;
+    }
+  }
+  return state.liveDistortionAmount;
 }
 
 function getGridPosition({ x, y, width, height }) {
@@ -293,6 +334,25 @@ function applyVoiceMetal(voice) {
   );
 }
 
+function applyVoiceDelay(voice) {
+  if (!voice?.delayNode) {
+    return;
+  }
+  const now = Tone.now();
+  voice.delayNode.delayTime.setValueAtTime(0.04 + (voice.delayAmount * 0.36), now);
+  voice.delayNode.feedback.setValueAtTime(0.08 + (voice.delayAmount * 0.72), now);
+  voice.delayNode.wet.setValueAtTime(voice.delayAmount * 0.85, now);
+}
+
+function applyVoiceDistortion(voice) {
+  if (!voice?.distortionNode) {
+    return;
+  }
+  const now = Tone.now();
+  voice.distortionNode.distortion = voice.distortionAmount * 0.95;
+  voice.distortionNode.wet.setValueAtTime(voice.distortionAmount * 0.9, now);
+}
+
 function getEditableHoldVoice() {
   if (state.selectedHoldId === null) {
     return null;
@@ -332,6 +392,52 @@ function setMetalAmountForTargets(amount) {
   for (const voice of targets) {
     voice.metalAmount = nextAmount;
     applyVoiceMetal(voice);
+  }
+  schedulePadDraw();
+}
+
+function setDelayAmountForTargets(amount) {
+  const nextAmount = clamp(amount, 0, 1);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice) {
+      return;
+    }
+    selectedVoice.delayAmount = nextAmount;
+    applyVoiceDelay(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveDelayAmount = nextAmount;
+  for (const voice of targets) {
+    voice.delayAmount = nextAmount;
+    applyVoiceDelay(voice);
+  }
+  schedulePadDraw();
+}
+
+function setDistortionAmountForTargets(amount) {
+  const nextAmount = clamp(amount, 0, 1);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice) {
+      return;
+    }
+    selectedVoice.distortionAmount = nextAmount;
+    applyVoiceDistortion(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveDistortionAmount = nextAmount;
+  for (const voice of targets) {
+    voice.distortionAmount = nextAmount;
+    applyVoiceDistortion(voice);
   }
   schedulePadDraw();
 }
@@ -399,13 +505,24 @@ function createVoice(pointerPosition, options = {}) {
     type: "sine",
     frequency: getVoiceMetalFrequency(grid.pitchRatio, state.liveMetalAmount),
   });
-  const gain = new Tone.Gain(0.0001).connect(state.masterGain);
+  const distortionNode = new Tone.Distortion(0);
+  const delayNode = new Tone.FeedbackDelay({
+    delayTime: 0.08,
+    feedback: 0.12,
+    wet: 0,
+  });
+  const gain = new Tone.Gain(0.0001);
   modOsc.connect(modGain);
   modGain.connect(source.playbackRate);
-  source.connect(gain);
+  source.connect(distortionNode);
+  distortionNode.connect(delayNode);
+  delayNode.connect(gain);
+  gain.connect(state.masterGain);
   source.onended = () => {
     modOsc.dispose();
     modGain.dispose();
+    distortionNode.dispose();
+    delayNode.dispose();
     source.dispose();
     gain.dispose();
   };
@@ -420,13 +537,19 @@ function createVoice(pointerPosition, options = {}) {
     sample,
     source,
     gain,
+    distortionNode,
+    delayNode,
     modOsc,
     modGain,
     pointerPosition,
     basePlaybackRate: grid.pitchRatio,
     metalAmount: state.liveMetalAmount,
+    delayAmount: state.liveDelayAmount,
+    distortionAmount: state.liveDistortionAmount,
   };
   applyVoiceMetal(voice);
+  applyVoiceDelay(voice);
+  applyVoiceDistortion(voice);
 
   return voice;
 }
@@ -631,6 +754,22 @@ async function handlePadDown(pointerId, position, options = {}) {
         1,
       );
       setMetalAmountForTargets(amount);
+    } else if (controlAction.action === "delay") {
+      state.controlDragByPointer.set(pointerId, "delay");
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setDelayAmountForTargets(amount);
+    } else if (controlAction.action === "distortion") {
+      state.controlDragByPointer.set(pointerId, "distortion");
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setDistortionAmountForTargets(amount);
     }
     return;
   }
@@ -709,15 +848,23 @@ async function handlePadDown(pointerId, position, options = {}) {
 }
 
 function handlePadMove(pointerId, position) {
-  if (state.controlDragByPointer?.get(pointerId) === "metal") {
-    const metalControl = getTopControlRegions(position.width).find((control) => control.action === "metal");
-    if (metalControl) {
+  const draggedControl = state.controlDragByPointer.get(pointerId);
+  if (draggedControl) {
+    const topControl = getTopControlRegions(position.width)
+      .find((control) => control.action === draggedControl);
+    if (topControl) {
       const amount = clamp(
-        (position.x - metalControl.x) / Math.max(1, metalControl.width),
+        (position.x - topControl.x) / Math.max(1, topControl.width),
         0,
         1,
       );
-      setMetalAmountForTargets(amount);
+      if (draggedControl === "metal") {
+        setMetalAmountForTargets(amount);
+      } else if (draggedControl === "delay") {
+        setDelayAmountForTargets(amount);
+      } else if (draggedControl === "distortion") {
+        setDistortionAmountForTargets(amount);
+      }
     }
     return;
   }
@@ -901,8 +1048,15 @@ function drawPad() {
     ctx.fillRect(control.x, control.y, control.width, control.height);
     ctx.strokeRect(control.x, control.y, control.width, control.height);
 
-    if (control.action === "metal") {
-      const amount = getDisplayedMetalAmount();
+    if (control.action === "metal" || control.action === "delay" || control.action === "distortion") {
+      let amount = 0;
+      if (control.action === "metal") {
+        amount = getDisplayedMetalAmount();
+      } else if (control.action === "delay") {
+        amount = getDisplayedDelayAmount();
+      } else if (control.action === "distortion") {
+        amount = getDisplayedDistortionAmount();
+      }
       ctx.fillStyle = "#000";
       ctx.fillRect(control.x + 4, control.y + control.height - 10, (control.width - 8) * amount, 6);
       ctx.fillStyle = "#fff";
