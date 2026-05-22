@@ -5,7 +5,6 @@ const bankSummary = document.getElementById("bankSummary");
 const sampleList = document.getElementById("sampleList");
 const voiceReadout = document.getElementById("voiceReadout");
 const toggleUiButton = document.getElementById("toggleUiButton");
-const modeButton = document.getElementById("modeButton");
 
 const controls = {
   sliceMin: document.getElementById("sliceMin"),
@@ -42,6 +41,13 @@ const state = {
 
 const canvas = touchPad;
 const ctx = canvas.getContext("2d");
+const CONTROL_LANE_HEIGHT = 72;
+
+function getNextHoldId() {
+  const holdId = state.nextHoldId;
+  state.nextHoldId += 1;
+  return holdId;
+}
 
 function setAudioStatus(message) {
   if (audioStatus) {
@@ -90,9 +96,52 @@ function getPointerPosition(event) {
   };
 }
 
+function getPlayableHeight(height) {
+  return Math.max(1, height - CONTROL_LANE_HEIGHT);
+}
+
+function getControlRegions(width, height) {
+  const laneTop = getPlayableHeight(height);
+  const laneHeight = height - laneTop;
+  const gap = 12;
+  const inset = 14;
+  const usableWidth = Math.max(0, width - inset * 2 - gap);
+  const buttonWidth = usableWidth / 2;
+
+  return [
+    {
+      action: "mode",
+      label: `Mode: ${state.mode.charAt(0).toUpperCase()}${state.mode.slice(1)}`,
+      x: inset,
+      y: laneTop + 10,
+      width: buttonWidth,
+      height: Math.max(28, laneHeight - 20),
+    },
+    {
+      action: "hold-current",
+      label: "Hold Current",
+      x: inset + buttonWidth + gap,
+      y: laneTop + 10,
+      width: buttonWidth,
+      height: Math.max(28, laneHeight - 20),
+    },
+  ];
+}
+
+function getControlActionAtPosition(pointerPosition) {
+  const controlsInPad = getControlRegions(pointerPosition.width, pointerPosition.height);
+  return controlsInPad.find((control) => (
+    pointerPosition.x >= control.x
+    && pointerPosition.x <= control.x + control.width
+    && pointerPosition.y >= control.y
+    && pointerPosition.y <= control.y + control.height
+  )) ?? null;
+}
+
 function getGridPosition({ x, y, width, height }) {
   const { rows, cols, edoSteps, pitchSpread } = getGridConfig();
-  const rowHeight = height / rows;
+  const playableHeight = getPlayableHeight(height);
+  const rowHeight = playableHeight / rows;
   const normalizedRow = clamp(y / rowHeight, 0, rows - 1e-6);
   const row = Math.floor(normalizedRow);
   const xNorm = clamp(x / width, 0, 1);
@@ -275,8 +324,7 @@ function startSoloVoice(pointerPosition) {
 }
 
 function createHoldVoice(pointerPosition) {
-  const holdId = state.nextHoldId;
-  state.nextHoldId += 1;
+  const holdId = getNextHoldId();
   const voice = createVoice(pointerPosition, { id: holdId, isHeld: true });
   if (!voice) {
     return null;
@@ -292,12 +340,51 @@ function updateVoicePitch(voice, pointerPosition) {
     return;
   }
 
+  if (pointerPosition.y > getPlayableHeight(pointerPosition.height)) {
+    return;
+  }
+
   const grid = getGridPosition(pointerPosition);
   voice.pointerPosition = pointerPosition;
   voice.source.playbackRate.cancelAndHoldAtTime(Tone.now());
   voice.source.playbackRate.linearRampTo(grid.pitchRatio, 0.015);
   updateVoiceReadout();
   drawPad();
+}
+
+function promoteVoiceToHold(voice) {
+  if (!voice) {
+    return null;
+  }
+
+  const holdId = getNextHoldId();
+  voice.id = holdId;
+  voice.isHeld = true;
+  state.holdVoices.set(holdId, voice);
+  return holdId;
+}
+
+function holdCurrentVoices() {
+  let didHoldVoice = false;
+
+  for (const [pointerId, voice] of state.transientVoices.entries()) {
+    state.transientVoices.delete(pointerId);
+    promoteVoiceToHold(voice);
+    didHoldVoice = true;
+  }
+
+  if (state.soloVoice) {
+    promoteVoiceToHold(state.soloVoice);
+    state.soloVoice = null;
+    state.soloPointers.clear();
+    state.soloLeadPointerId = null;
+    didHoldVoice = true;
+  }
+
+  if (didHoldVoice) {
+    updateVoiceReadout();
+    drawPad();
+  }
 }
 
 function findHoldVoiceAtPosition(pointerPosition) {
@@ -337,7 +424,8 @@ function drawPad() {
   const { rows, cols } = getGridConfig();
   const width = bounds.width;
   const height = bounds.height;
-  const rowHeight = height / rows;
+  const playableHeight = getPlayableHeight(height);
+  const rowHeight = playableHeight / rows;
   const colWidth = width / cols;
 
   ctx.clearRect(0, 0, width, height);
@@ -364,6 +452,25 @@ function drawPad() {
     ctx.lineTo(width, y);
   }
   ctx.stroke();
+
+  ctx.fillStyle = "#f1f1f1";
+  ctx.fillRect(0, playableHeight, width, height - playableHeight);
+  ctx.strokeStyle = "#000";
+  ctx.strokeRect(0, playableHeight, width, height - playableHeight);
+
+  const controlRegions = getControlRegions(width, height);
+  ctx.font = '16px "Times New Roman", Times, serif';
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const control of controlRegions) {
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1;
+    ctx.fillRect(control.x, control.y, control.width, control.height);
+    ctx.strokeRect(control.x, control.y, control.width, control.height);
+    ctx.fillStyle = "#000";
+    ctx.fillText(control.label, control.x + control.width / 2, control.y + control.height / 2);
+  }
 
   for (const voice of state.holdVoices.values()) {
     const { x, y } = voice.pointerPosition;
@@ -437,6 +544,18 @@ for (const control of Object.values(controls)) {
 
 canvas.addEventListener("pointerdown", async (event) => {
   event.preventDefault();
+  const position = getPointerPosition(event);
+  const controlAction = getControlActionAtPosition(position);
+
+  if (controlAction) {
+    if (controlAction.action === "mode") {
+      cycleMode();
+    } else if (controlAction.action === "hold-current") {
+      holdCurrentVoices();
+    }
+    return;
+  }
+
   await ensureAudio();
 
   if (!state.samples.length) {
@@ -445,7 +564,6 @@ canvas.addEventListener("pointerdown", async (event) => {
     return;
   }
 
-  const position = getPointerPosition(event);
   canvas.setPointerCapture(event.pointerId);
 
   if (state.mode === "solo") {
@@ -667,15 +785,13 @@ function cycleMode() {
     state.mode = "free";
   }
 
-  modeButton.textContent = `Mode: ${state.mode.charAt(0).toUpperCase()}${state.mode.slice(1)}`;
   state.holdDragByPointer.clear();
   state.holdGestureByPointer.clear();
   state.soloPointers.clear();
   state.soloLeadPointerId = null;
   stopSoloVoice();
+  drawPad();
 }
-
-modeButton.addEventListener("click", cycleMode);
 
 updateOutputLabels();
 renderSampleBank();
