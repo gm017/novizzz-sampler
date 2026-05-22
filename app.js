@@ -41,7 +41,7 @@ const state = {
   interactionMode: "play",
   selectedHoldId: null,
   topEffectView: "main",
-  liveMetalAmount: 0.35,
+  liveMetalAmount: 0,
   liveDelayTimeAmount: 0.18,
   liveDelayFeedbackAmount: 0.18,
   liveDelayMixAmount: 0.0,
