@@ -50,7 +50,9 @@ const state = {
   liveDelayMixAmount: 0.0,
   liveDistortionAmount: 0.12,
   globalPitchAmount: 0.5,
-  globalDelayAmount: 0.0,
+  globalDelayTimeAmount: 0.22,
+  globalDelayFeedbackAmount: 0.18,
+  globalDelayMixAmount: 0.0,
   liveSequencePattern: Array(16).fill(true),
   liveSequenceRateMultiplier: 1,
   nextHoldId: 1,
@@ -274,8 +276,47 @@ function getTopControlRegions(width) {
       },
       {
         action: "global-delay",
-        label: `Delay ${getDisplayedGlobalDelayAmount().toFixed(2)}`,
+        label: `Delay ${getDisplayedGlobalDelayMixAmount().toFixed(2)}`,
         x: inset + (controlWidth + gap) * 2,
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+    ];
+  }
+
+  if (state.topEffectView === "global-delay") {
+    const usableWidth = Math.max(0, width - inset * 2 - gap * 3);
+    const controlWidth = usableWidth / 4;
+    return [
+      {
+        action: "global-delay-back",
+        label: "Back",
+        x: inset,
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+      {
+        action: "global-delay-time",
+        label: `Time ${getDisplayedGlobalDelayTimeAmount().toFixed(2)}`,
+        x: inset + (controlWidth + gap),
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+      {
+        action: "global-delay-feedback",
+        label: `Fdbk ${getDisplayedGlobalDelayFeedbackAmount().toFixed(2)}`,
+        x: inset + (controlWidth + gap) * 2,
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+      {
+        action: "global-delay-mix",
+        label: `Mix ${getDisplayedGlobalDelayMixAmount().toFixed(2)}`,
+        x: inset + (controlWidth + gap) * 3,
         y: controlY,
         width: controlWidth,
         height: controlHeight,
@@ -405,7 +446,19 @@ function getDisplayedGlobalPitchSemitones() {
 }
 
 function getDisplayedGlobalDelayAmount() {
-  return state.globalDelayAmount;
+  return getDisplayedGlobalDelayMixAmount();
+}
+
+function getDisplayedGlobalDelayTimeAmount() {
+  return state.globalDelayTimeAmount;
+}
+
+function getDisplayedGlobalDelayFeedbackAmount() {
+  return state.globalDelayFeedbackAmount;
+}
+
+function getDisplayedGlobalDelayMixAmount() {
+  return state.globalDelayMixAmount;
 }
 
 function getDisplayedDistortionAmount() {
@@ -615,9 +668,9 @@ function applyGlobalDelay() {
     return;
   }
   const now = Tone.now();
-  state.globalDelay.delayTime.setValueAtTime(0.06 + (state.globalDelayAmount * 0.54), now);
-  state.globalDelay.feedback.setValueAtTime(0.08 + (state.globalDelayAmount * 0.72), now);
-  state.globalDelay.wet.setValueAtTime(state.globalDelayAmount * 0.85, now);
+  state.globalDelay.delayTime.setValueAtTime(0.06 + (state.globalDelayTimeAmount * 0.54), now);
+  state.globalDelay.feedback.setValueAtTime(0.08 + (state.globalDelayFeedbackAmount * 0.72), now);
+  state.globalDelay.wet.setValueAtTime(state.globalDelayMixAmount * 0.85, now);
 }
 
 function applyVoiceSequencerStep(voice, time = Tone.now()) {
@@ -806,7 +859,25 @@ function setGlobalPitchAmount(amount) {
 }
 
 function setGlobalDelayAmount(amount) {
-  state.globalDelayAmount = clamp(amount, 0, 1);
+  state.globalDelayMixAmount = clamp(amount, 0, 1);
+  applyGlobalDelay();
+  schedulePadDraw();
+}
+
+function setGlobalDelayTimeAmount(amount) {
+  state.globalDelayTimeAmount = clamp(amount, 0, 1);
+  applyGlobalDelay();
+  schedulePadDraw();
+}
+
+function setGlobalDelayFeedbackAmount(amount) {
+  state.globalDelayFeedbackAmount = clamp(amount, 0, 1);
+  applyGlobalDelay();
+  schedulePadDraw();
+}
+
+function setGlobalDelayMixAmount(amount) {
+  state.globalDelayMixAmount = clamp(amount, 0, 1);
   applyGlobalDelay();
   schedulePadDraw();
 }
@@ -1262,13 +1333,35 @@ async function handlePadDown(pointerId, position, options = {}) {
       );
       setGlobalPitchAmount(amount);
     } else if (controlAction.action === "global-delay") {
-      state.controlDragByPointer.set(pointerId, "global-delay");
+      state.topEffectView = "global-delay";
+      schedulePadDraw();
+    } else if (controlAction.action === "global-delay-back") {
+      state.topEffectView = "global";
+      schedulePadDraw();
+    } else if (controlAction.action === "global-delay-time") {
+      state.controlDragByPointer.set(pointerId, "global-delay-time");
       const amount = clamp(
         (position.x - controlAction.x) / Math.max(1, controlAction.width),
         0,
         1,
       );
-      setGlobalDelayAmount(amount);
+      setGlobalDelayTimeAmount(amount);
+    } else if (controlAction.action === "global-delay-feedback") {
+      state.controlDragByPointer.set(pointerId, "global-delay-feedback");
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setGlobalDelayFeedbackAmount(amount);
+    } else if (controlAction.action === "global-delay-mix") {
+      state.controlDragByPointer.set(pointerId, "global-delay-mix");
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setGlobalDelayMixAmount(amount);
     } else if (controlAction.action === "delay-time") {
       state.controlDragByPointer.set(pointerId, "delay-time");
       const amount = clamp(
@@ -1405,8 +1498,12 @@ function handlePadMove(pointerId, position) {
         setMetalAmountForTargets(amount);
       } else if (draggedControl === "global-pitch") {
         setGlobalPitchAmount(amount);
-      } else if (draggedControl === "global-delay") {
-        setGlobalDelayAmount(amount);
+      } else if (draggedControl === "global-delay-time") {
+        setGlobalDelayTimeAmount(amount);
+      } else if (draggedControl === "global-delay-feedback") {
+        setGlobalDelayFeedbackAmount(amount);
+      } else if (draggedControl === "global-delay-mix") {
+        setGlobalDelayMixAmount(amount);
       } else if (draggedControl === "delay-time") {
         setDelayTimeAmountForTargets(amount);
       } else if (draggedControl === "delay-feedback") {
@@ -1611,6 +1708,9 @@ function drawPad() {
       control.action === "metal"
       || control.action === "global-pitch"
       || control.action === "global-delay"
+      || control.action === "global-delay-time"
+      || control.action === "global-delay-feedback"
+      || control.action === "global-delay-mix"
       || control.action === "distortion"
       || control.action === "delay-time"
       || control.action === "delay-feedback"
@@ -1623,6 +1723,12 @@ function drawPad() {
         amount = getDisplayedGlobalPitchAmount();
       } else if (control.action === "global-delay") {
         amount = getDisplayedGlobalDelayAmount();
+      } else if (control.action === "global-delay-time") {
+        amount = getDisplayedGlobalDelayTimeAmount();
+      } else if (control.action === "global-delay-feedback") {
+        amount = getDisplayedGlobalDelayFeedbackAmount();
+      } else if (control.action === "global-delay-mix") {
+        amount = getDisplayedGlobalDelayMixAmount();
       } else if (control.action === "delay-time") {
         amount = getDisplayedDelayTimeAmount();
       } else if (control.action === "delay-feedback") {
@@ -1655,6 +1761,34 @@ function drawPad() {
         getDisplayedDelayTimeAmount(),
         getDisplayedDelayFeedbackAmount(),
         getDisplayedDelayMixAmount(),
+      ];
+
+      delayValues.forEach((value, index) => {
+        const x = miniX + index * (miniWidth + miniGap);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(x, miniBarY, miniWidth * value, miniBarHeight);
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(
+          x + miniWidth * value,
+          miniBarY,
+          Math.max(0, miniWidth - miniWidth * value),
+          miniBarHeight,
+        );
+        ctx.strokeStyle = "#000";
+        ctx.strokeRect(x, miniBarY, miniWidth, miniBarHeight);
+      });
+    }
+
+    if (control.action === "global-delay") {
+      const miniBarY = control.y + control.height - 10;
+      const miniBarHeight = 4;
+      const miniGap = 6;
+      const miniWidth = (control.width - 8 - miniGap * 2) / 3;
+      const miniX = control.x + 4;
+      const delayValues = [
+        getDisplayedGlobalDelayTimeAmount(),
+        getDisplayedGlobalDelayFeedbackAmount(),
+        getDisplayedGlobalDelayMixAmount(),
       ];
 
       delayValues.forEach((value, index) => {
