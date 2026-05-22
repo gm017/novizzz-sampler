@@ -43,10 +43,10 @@ const state = {
   liveMetalAmount: 0.35,
   liveDelayTimeAmount: 0.18,
   liveDelayFeedbackAmount: 0.18,
-  liveDelayMixAmount: 0.18,
+  liveDelayMixAmount: 0.0,
   liveDistortionAmount: 0.12,
-  liveTremoloSpeedAmount: 0.28,
-  liveTremoloMixAmount: 0.24,
+  liveTremoloSpeedAmount: 0.0,
+  liveTremoloMixAmount: 0.0,
   nextHoldId: 1,
   mode: "free",
 };
@@ -1397,9 +1397,7 @@ function drawPad() {
 
     if (
       control.action === "metal"
-      || control.action === "delay"
       || control.action === "distortion"
-      || control.action === "tremolo"
       || control.action === "delay-time"
       || control.action === "delay-feedback"
       || control.action === "delay-mix"
@@ -1409,8 +1407,6 @@ function drawPad() {
       let amount = 0;
       if (control.action === "metal") {
         amount = getDisplayedMetalAmount();
-      } else if (control.action === "delay") {
-        amount = getDisplayedDelayAmount();
       } else if (control.action === "delay-time") {
         amount = getDisplayedDelayTimeAmount();
       } else if (control.action === "delay-feedback") {
@@ -1419,8 +1415,6 @@ function drawPad() {
         amount = getDisplayedDelayMixAmount();
       } else if (control.action === "distortion") {
         amount = getDisplayedDistortionAmount();
-      } else if (control.action === "tremolo") {
-        amount = getDisplayedTremoloMixAmount();
       } else if (control.action === "tremolo-speed") {
         amount = getDisplayedTremoloSpeedAmount();
       } else if (control.action === "tremolo-mix") {
@@ -1440,7 +1434,7 @@ function drawPad() {
     }
 
     if (control.action === "delay") {
-      const miniBarY = control.y + control.height - 22;
+      const miniBarY = control.y + control.height - 10;
       const miniBarHeight = 4;
       const miniGap = 6;
       const miniWidth = (control.width - 8 - miniGap * 2) / 3;
@@ -1468,7 +1462,7 @@ function drawPad() {
     }
 
     if (control.action === "tremolo") {
-      const miniBarY = control.y + control.height - 22;
+      const miniBarY = control.y + control.height - 10;
       const miniBarHeight = 4;
       const miniGap = 6;
       const miniWidth = (control.width - 8 - miniGap) / 2;
