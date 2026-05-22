@@ -26,7 +26,6 @@ const outputs = {
 };
 
 const state = {
-  audioContext: null,
   masterGain: null,
   samples: [],
   transientVoices: new Map(),
@@ -124,31 +123,24 @@ function randomBetween(min, max) {
 }
 
 function initAudio() {
-  if (!state.audioContext) {
-    const AudioContextRef = window.AudioContext || window.webkitAudioContext;
-    state.audioContext = new AudioContextRef();
-    state.masterGain = state.audioContext.createGain();
-    state.masterGain.gain.value = 0.9;
-    state.masterGain.connect(state.audioContext.destination);
+  if (!state.masterGain) {
+    state.masterGain = new Tone.Gain(0.9).toDestination();
   }
 }
 
 async function ensureAudio() {
   initAudio();
-
-  if (state.audioContext.state !== "running") {
-    await state.audioContext.resume();
-  }
+  await Tone.start();
 
   setAudioStatus("Running");
 }
 
 async function decodeFile(file) {
   const arrayBuffer = await file.arrayBuffer();
-  const buffer = await state.audioContext.decodeAudioData(arrayBuffer.slice(0));
+  const audioBuffer = await Tone.getContext().rawContext.decodeAudioData(arrayBuffer.slice(0));
   return {
     name: file.name,
-    buffer,
+    buffer: new Tone.ToneAudioBuffer(audioBuffer),
   };
 }
 
@@ -189,14 +181,13 @@ function updateVoiceReadout() {
 
 function stopVoiceCollection(collection, key) {
   const voice = collection.get(key);
-  if (!voice || !state.audioContext) {
+  if (!voice) {
     return;
   }
 
-  const now = state.audioContext.currentTime;
-  voice.gain.gain.cancelScheduledValues(now);
-  voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
-  voice.gain.gain.linearRampToValueAtTime(0.0001, now + 0.08);
+  const now = Tone.now();
+  voice.gain.gain.cancelAndHoldAtTime(now);
+  voice.gain.gain.linearRampTo(0.0001, 0.08, now);
   voice.source.stop(now + 0.09);
   collection.delete(key);
   updateVoiceReadout();
@@ -212,14 +203,13 @@ function stopHoldVoice(holdId) {
 }
 
 function stopSoloVoice() {
-  if (!state.soloVoice || !state.audioContext) {
+  if (!state.soloVoice) {
     return;
   }
 
-  const now = state.audioContext.currentTime;
-  state.soloVoice.gain.gain.cancelScheduledValues(now);
-  state.soloVoice.gain.gain.setValueAtTime(state.soloVoice.gain.gain.value, now);
-  state.soloVoice.gain.gain.linearRampToValueAtTime(0.0001, now + 0.08);
+  const now = Tone.now();
+  state.soloVoice.gain.gain.cancelAndHoldAtTime(now);
+  state.soloVoice.gain.gain.linearRampTo(0.0001, 0.08, now);
   state.soloVoice.source.stop(now + 0.09);
   state.soloVoice = null;
   updateVoiceReadout();
@@ -228,7 +218,7 @@ function stopSoloVoice() {
 
 function createVoice(pointerPosition, options = {}) {
   const sample = chooseRandomSample();
-  if (!sample || !state.audioContext || !state.masterGain) {
+  if (!sample || !state.masterGain) {
     return null;
   }
 
@@ -239,20 +229,22 @@ function createVoice(pointerPosition, options = {}) {
   const offset = maxOffset > 0 ? Math.random() * maxOffset : 0;
   const snake = getSnakePosition(pointerPosition);
 
-  const source = state.audioContext.createBufferSource();
-  source.buffer = sample.buffer;
-  source.loop = true;
-  source.loopStart = offset;
-  source.loopEnd = Math.min(sample.buffer.duration, offset + duration);
-  source.playbackRate.setValueAtTime(snake.pitchRatio, state.audioContext.currentTime);
-
-  const gain = state.audioContext.createGain();
-  gain.gain.setValueAtTime(0.0001, state.audioContext.currentTime);
-  gain.gain.linearRampToValueAtTime(0.9, state.audioContext.currentTime + 0.02);
-
+  const source = new Tone.ToneBufferSource({
+    url: sample.buffer,
+    loop: true,
+    loopStart: offset,
+    loopEnd: Math.min(sample.buffer.duration, offset + duration),
+    playbackRate: snake.pitchRatio,
+  });
+  const gain = new Tone.Gain(0.0001).connect(state.masterGain);
   source.connect(gain);
-  gain.connect(state.masterGain);
-  source.start(state.audioContext.currentTime, offset);
+  source.onended = () => {
+    source.dispose();
+    gain.dispose();
+  };
+
+  gain.gain.linearRampTo(0.9, 0.02);
+  source.start(Tone.now(), offset);
 
   return {
     id: options.id ?? null,
@@ -298,17 +290,14 @@ function createHoldVoice(pointerPosition) {
 }
 
 function updateVoicePitch(voice, pointerPosition) {
-  if (!voice || !state.audioContext) {
+  if (!voice) {
     return;
   }
 
   const snake = getSnakePosition(pointerPosition);
   voice.pointerPosition = pointerPosition;
-  voice.source.playbackRate.cancelScheduledValues(state.audioContext.currentTime);
-  voice.source.playbackRate.linearRampToValueAtTime(
-    snake.pitchRatio,
-    state.audioContext.currentTime + 0.03,
-  );
+  voice.source.playbackRate.cancelAndHoldAtTime(Tone.now());
+  voice.source.playbackRate.linearRampTo(snake.pitchRatio, 0.03);
   updateVoiceReadout();
   drawPad();
 }
