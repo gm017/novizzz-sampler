@@ -321,7 +321,7 @@ function updateVoicePitch(voice, pointerPosition) {
   const grid = getGridPosition(pointerPosition);
   voice.pointerPosition = pointerPosition;
   voice.source.playbackRate.cancelAndHoldAtTime(Tone.now());
-  voice.source.playbackRate.linearRampTo(grid.pitchRatio, 0.015);
+  voice.source.playbackRate.setValueAtTime(grid.pitchRatio, Tone.now());
   drawPad();
 }
 
@@ -437,6 +437,222 @@ function getLastSoloPointerId(excludePointerId = null) {
   return nextPointerId;
 }
 
+async function handlePadDown(pointerId, position, options = {}) {
+  const { capturePointer = false } = options;
+  const controlAction = getControlActionAtPosition(position);
+
+  if (controlAction) {
+    if (controlAction.action === "mode") {
+      cycleMode();
+    } else if (controlAction.action === "hold-current") {
+      holdCurrentVoices();
+    }
+    return;
+  }
+
+  await ensureAudio();
+
+  if (!state.samples.length) {
+    setAudioStatus("Load samples first");
+    drawPad();
+    return;
+  }
+
+  if (capturePointer) {
+    canvas.setPointerCapture(pointerId);
+  }
+
+  if (state.mode === "solo") {
+    state.soloPointers.set(pointerId, {
+      position,
+      startedAt: performance.now(),
+    });
+    state.soloLeadPointerId = pointerId;
+
+    if (!state.soloVoice) {
+      startSoloVoice(position);
+      return;
+    }
+
+    updateVoicePitch(state.soloVoice, position);
+    return;
+  }
+
+  if (state.mode === "hold") {
+    const existingHoldId = findHoldVoiceAtPosition(position);
+    if (existingHoldId !== null) {
+      state.holdDragByPointer.set(pointerId, existingHoldId);
+      state.holdGestureByPointer.set(pointerId, {
+        holdId: existingHoldId,
+        startPosition: position,
+        lastPosition: position,
+        moved: false,
+      });
+      const voice = state.holdVoices.get(existingHoldId);
+      if (voice) {
+        updateVoicePitch(voice, position);
+      }
+      return;
+    }
+
+    state.lastHoldTap = null;
+    state.holdGestureByPointer.delete(pointerId);
+    const holdId = createHoldVoice(position);
+    if (holdId !== null) {
+      state.holdDragByPointer.set(pointerId, holdId);
+      const voice = state.holdVoices.get(holdId);
+      if (voice) {
+        updateVoicePitch(voice, position);
+      }
+    }
+    return;
+  }
+
+  storeTransientVoice(pointerId, position);
+}
+
+function handlePadMove(pointerId, position) {
+  if (state.mode === "solo") {
+    const pointerState = state.soloPointers.get(pointerId);
+    if (!pointerState) {
+      return;
+    }
+    pointerState.position = position;
+    if (state.soloLeadPointerId === pointerId && state.soloVoice) {
+      updateVoicePitch(state.soloVoice, position);
+    }
+    return;
+  }
+
+  if (state.mode === "hold") {
+    const gesture = state.holdGestureByPointer.get(pointerId);
+    if (gesture) {
+      gesture.lastPosition = position;
+      if (!gesture.moved && getPointerDistance(gesture.startPosition, position) > 12) {
+        gesture.moved = true;
+      }
+    }
+    const holdId = state.holdDragByPointer.get(pointerId);
+    if (holdId === undefined) {
+      return;
+    }
+    const voice = state.holdVoices.get(holdId);
+    if (voice) {
+      updateVoicePitch(voice, position);
+    }
+    return;
+  }
+
+  const voice = state.transientVoices.get(pointerId);
+  if (!voice) {
+    return;
+  }
+  updateVoicePitch(voice, position);
+}
+
+function handlePadUp(pointerId, buttons = 0) {
+  if (state.mode === "solo") {
+    state.soloPointers.delete(pointerId);
+
+    if (!state.soloPointers.size) {
+      state.soloLeadPointerId = null;
+      stopSoloVoice();
+      return;
+    }
+
+    if (state.soloLeadPointerId === pointerId) {
+      state.soloLeadPointerId = getLastSoloPointerId(pointerId);
+      const pointerState = state.soloPointers.get(state.soloLeadPointerId);
+      if (pointerState && state.soloVoice) {
+        updateVoicePitch(state.soloVoice, pointerState.position);
+      }
+    }
+    return;
+  }
+
+  if (state.mode === "hold") {
+    const gesture = state.holdGestureByPointer.get(pointerId);
+    state.holdDragByPointer.delete(pointerId);
+    state.holdGestureByPointer.delete(pointerId);
+
+    if (!gesture || gesture.moved) {
+      return;
+    }
+
+    const now = performance.now();
+    const isDoubleTap = state.lastHoldTap
+      && state.lastHoldTap.holdId === gesture.holdId
+      && now - state.lastHoldTap.time < 300;
+
+    if (isDoubleTap) {
+      stopHoldVoice(gesture.holdId);
+      state.lastHoldTap = null;
+      return;
+    }
+
+    state.lastHoldTap = {
+      holdId: gesture.holdId,
+      time: now,
+      position: gesture.lastPosition,
+    };
+    return;
+  }
+
+  if (buttons === 0) {
+    stopTransientVoice(pointerId);
+  }
+}
+
+function handlePadCancel(pointerId) {
+  if (state.mode === "solo") {
+    state.soloPointers.delete(pointerId);
+
+    if (!state.soloPointers.size) {
+      state.soloLeadPointerId = null;
+      stopSoloVoice();
+      return;
+    }
+
+    if (state.soloLeadPointerId === pointerId) {
+      state.soloLeadPointerId = getLastSoloPointerId(pointerId);
+      const pointerState = state.soloPointers.get(state.soloLeadPointerId);
+      if (pointerState && state.soloVoice) {
+        updateVoicePitch(state.soloVoice, pointerState.position);
+      }
+    }
+    return;
+  }
+
+  if (state.mode === "hold") {
+    state.holdDragByPointer.delete(pointerId);
+    state.holdGestureByPointer.delete(pointerId);
+    return;
+  }
+
+  stopTransientVoice(pointerId);
+}
+
+function handlePadLeave(pointerId, buttons = 0) {
+  if (state.mode === "solo") {
+    if (buttons === 0) {
+      handlePadCancel(pointerId);
+    }
+    return;
+  }
+
+  if (state.mode === "hold") {
+    if (buttons === 0) {
+      state.holdDragByPointer.delete(pointerId);
+      state.holdGestureByPointer.delete(pointerId);
+    }
+    return;
+  }
+
+  if (buttons === 0) {
+    stopTransientVoice(pointerId);
+  }
+}
+
 function drawPad() {
   const bounds = canvas.getBoundingClientRect();
   const width = bounds.width;
@@ -536,231 +752,69 @@ for (const control of Object.values(controls)) {
 }
 
 canvas.addEventListener("pointerdown", async (event) => {
+  if (event.pointerType === "touch") {
+    return;
+  }
   event.preventDefault();
-  const position = getPointerPosition(event);
-  const controlAction = getControlActionAtPosition(position);
-
-  if (controlAction) {
-    if (controlAction.action === "mode") {
-      cycleMode();
-    } else if (controlAction.action === "hold-current") {
-      holdCurrentVoices();
-    }
-    return;
-  }
-
-  await ensureAudio();
-
-  if (!state.samples.length) {
-    setAudioStatus("Load samples first");
-    drawPad();
-    return;
-  }
-
-  canvas.setPointerCapture(event.pointerId);
-
-  if (state.mode === "solo") {
-    state.soloPointers.set(event.pointerId, {
-      position,
-      startedAt: performance.now(),
-    });
-    state.soloLeadPointerId = event.pointerId;
-
-    if (!state.soloVoice) {
-      startSoloVoice(position);
-      return;
-    }
-
-    updateVoicePitch(state.soloVoice, position);
-    return;
-  }
-
-  if (state.mode === "hold") {
-    const existingHoldId = findHoldVoiceAtPosition(position);
-    if (existingHoldId !== null) {
-      state.holdDragByPointer.set(event.pointerId, existingHoldId);
-      state.holdGestureByPointer.set(event.pointerId, {
-        holdId: existingHoldId,
-        startPosition: position,
-        lastPosition: position,
-        moved: false,
-      });
-      const voice = state.holdVoices.get(existingHoldId);
-      if (voice) {
-        updateVoicePitch(voice, position);
-      }
-      return;
-    }
-
-    state.lastHoldTap = null;
-    state.holdGestureByPointer.delete(event.pointerId);
-    const holdId = createHoldVoice(position);
-    if (holdId !== null) {
-      state.holdDragByPointer.set(event.pointerId, holdId);
-      const voice = state.holdVoices.get(holdId);
-      if (voice) {
-        updateVoicePitch(voice, position);
-      }
-    }
-    return;
-  }
-
-  storeTransientVoice(event.pointerId, position);
+  await handlePadDown(event.pointerId, getPointerPosition(event), { capturePointer: true });
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if (event.pointerType === "touch") {
+    return;
+  }
   event.preventDefault();
-  const position = getPointerPosition(event);
-
-  if (state.mode === "solo") {
-    const pointerState = state.soloPointers.get(event.pointerId);
-    if (!pointerState) {
-      return;
-    }
-    pointerState.position = position;
-    if (state.soloLeadPointerId === event.pointerId && state.soloVoice) {
-      updateVoicePitch(state.soloVoice, position);
-    }
-    return;
-  }
-
-  if (state.mode === "hold") {
-    const gesture = state.holdGestureByPointer.get(event.pointerId);
-    if (gesture) {
-      gesture.lastPosition = position;
-      if (!gesture.moved && getPointerDistance(gesture.startPosition, position) > 12) {
-        gesture.moved = true;
-      }
-    }
-    const holdId = state.holdDragByPointer.get(event.pointerId);
-    if (holdId === undefined) {
-      return;
-    }
-    const voice = state.holdVoices.get(holdId);
-    if (voice) {
-      updateVoicePitch(voice, position);
-    }
-    return;
-  }
-
-  const voice = state.transientVoices.get(event.pointerId);
-  if (!voice) {
-    return;
-  }
-  updateVoicePitch(voice, position);
+  handlePadMove(event.pointerId, getPointerPosition(event));
 });
 
 canvas.addEventListener("pointerup", (event) => {
-  if (state.mode === "solo") {
-    state.soloPointers.delete(event.pointerId);
-
-    if (!state.soloPointers.size) {
-      state.soloLeadPointerId = null;
-      stopSoloVoice();
-      return;
-    }
-
-    if (state.soloLeadPointerId === event.pointerId) {
-      state.soloLeadPointerId = getLastSoloPointerId(event.pointerId);
-      const pointerState = state.soloPointers.get(state.soloLeadPointerId);
-      if (pointerState && state.soloVoice) {
-        updateVoicePitch(state.soloVoice, pointerState.position);
-      }
-    }
+  if (event.pointerType === "touch") {
     return;
   }
-
-  if (state.mode === "hold") {
-    const gesture = state.holdGestureByPointer.get(event.pointerId);
-    state.holdDragByPointer.delete(event.pointerId);
-    state.holdGestureByPointer.delete(event.pointerId);
-
-    if (!gesture || gesture.moved) {
-      return;
-    }
-
-    const now = performance.now();
-    const isDoubleTap = state.lastHoldTap
-      && state.lastHoldTap.holdId === gesture.holdId
-      && now - state.lastHoldTap.time < 300;
-
-    if (isDoubleTap) {
-      stopHoldVoice(gesture.holdId);
-      state.lastHoldTap = null;
-      return;
-    }
-
-    state.lastHoldTap = {
-      holdId: gesture.holdId,
-      time: now,
-      position: gesture.lastPosition,
-    };
-    return;
-  }
-  stopTransientVoice(event.pointerId);
+  handlePadUp(event.pointerId);
 });
 
 canvas.addEventListener("pointercancel", (event) => {
-  if (state.mode === "solo") {
-    state.soloPointers.delete(event.pointerId);
-
-    if (!state.soloPointers.size) {
-      state.soloLeadPointerId = null;
-      stopSoloVoice();
-      return;
-    }
-
-    if (state.soloLeadPointerId === event.pointerId) {
-      state.soloLeadPointerId = getLastSoloPointerId(event.pointerId);
-      const pointerState = state.soloPointers.get(state.soloLeadPointerId);
-      if (pointerState && state.soloVoice) {
-        updateVoicePitch(state.soloVoice, pointerState.position);
-      }
-    }
+  if (event.pointerType === "touch") {
     return;
   }
-
-  if (state.mode === "hold") {
-    state.holdDragByPointer.delete(event.pointerId);
-    state.holdGestureByPointer.delete(event.pointerId);
-    return;
-  }
-  stopTransientVoice(event.pointerId);
+  handlePadCancel(event.pointerId);
 });
 
 canvas.addEventListener("pointerleave", (event) => {
-  if (state.mode === "solo") {
-    if (event.buttons === 0) {
-      state.soloPointers.delete(event.pointerId);
-
-      if (!state.soloPointers.size) {
-        state.soloLeadPointerId = null;
-        stopSoloVoice();
-        return;
-      }
-
-      if (state.soloLeadPointerId === event.pointerId) {
-        state.soloLeadPointerId = getLastSoloPointerId(event.pointerId);
-        const pointerState = state.soloPointers.get(state.soloLeadPointerId);
-        if (pointerState && state.soloVoice) {
-          updateVoicePitch(state.soloVoice, pointerState.position);
-        }
-      }
-    }
+  if (event.pointerType === "touch") {
     return;
   }
-
-  if (state.mode === "hold") {
-    if (event.buttons === 0) {
-      state.holdDragByPointer.delete(event.pointerId);
-      state.holdGestureByPointer.delete(event.pointerId);
-    }
-    return;
-  }
-  if (event.buttons === 0) {
-    stopTransientVoice(event.pointerId);
-  }
+  handlePadLeave(event.pointerId, event.buttons);
 });
+
+canvas.addEventListener("touchstart", (event) => {
+  event.preventDefault();
+  for (const touch of event.changedTouches) {
+    void handlePadDown(`touch-${touch.identifier}`, getPointerPosition(touch));
+  }
+}, { passive: false });
+
+canvas.addEventListener("touchmove", (event) => {
+  event.preventDefault();
+  for (const touch of event.changedTouches) {
+    handlePadMove(`touch-${touch.identifier}`, getPointerPosition(touch));
+  }
+}, { passive: false });
+
+canvas.addEventListener("touchend", (event) => {
+  event.preventDefault();
+  for (const touch of event.changedTouches) {
+    handlePadUp(`touch-${touch.identifier}`, 0);
+  }
+}, { passive: false });
+
+canvas.addEventListener("touchcancel", (event) => {
+  event.preventDefault();
+  for (const touch of event.changedTouches) {
+    handlePadCancel(`touch-${touch.identifier}`);
+  }
+}, { passive: false });
 
 window.addEventListener("resize", resizeCanvas);
 
