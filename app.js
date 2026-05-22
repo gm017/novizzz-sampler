@@ -28,6 +28,7 @@ const state = {
   masterGain: null,
   globalPitchShift: null,
   globalDelay: null,
+  globalDistortion: null,
   padBackgroundCanvas: null,
   drawScheduled: false,
   controlDragByPointer: new Map(),
@@ -53,6 +54,7 @@ const state = {
   globalDelayTimeAmount: 0.22,
   globalDelayFeedbackAmount: 0.18,
   globalDelayMixAmount: 0.0,
+  globalDistortionAmount: 0.0,
   liveSequencePattern: Array(16).fill(true),
   liveSequenceRateMultiplier: 1,
   nextHoldId: 1,
@@ -255,8 +257,8 @@ function getTopControlRegions(width) {
   }
 
   if (state.topEffectView === "global") {
-    const usableWidth = Math.max(0, width - inset * 2 - gap * 2);
-    const controlWidth = usableWidth / 3;
+    const usableWidth = Math.max(0, width - inset * 2 - gap * 3);
+    const controlWidth = usableWidth / 4;
     return [
       {
         action: "global-back",
@@ -278,6 +280,14 @@ function getTopControlRegions(width) {
         action: "global-delay",
         label: `Delay ${getDisplayedGlobalDelayMixAmount().toFixed(2)}`,
         x: inset + (controlWidth + gap) * 2,
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+      {
+        action: "global-distortion",
+        label: `Dist ${getDisplayedGlobalDistortionAmount().toFixed(2)}`,
+        x: inset + (controlWidth + gap) * 3,
         y: controlY,
         width: controlWidth,
         height: controlHeight,
@@ -461,6 +471,10 @@ function getDisplayedGlobalDelayMixAmount() {
   return state.globalDelayMixAmount;
 }
 
+function getDisplayedGlobalDistortionAmount() {
+  return state.globalDistortionAmount;
+}
+
 function getDisplayedDistortionAmount() {
   if (state.interactionMode === "edit") {
     const voice = getEditableHoldVoice();
@@ -571,12 +585,15 @@ function initAudio() {
       feedback: 0.12,
       wet: 0,
     });
+    state.globalDistortion = new Tone.Distortion(0);
     state.masterGain = new Tone.Gain(0.9).toDestination();
     state.masterInput.connect(state.globalPitchShift);
     state.globalPitchShift.connect(state.globalDelay);
-    state.globalDelay.connect(state.masterGain);
+    state.globalDelay.connect(state.globalDistortion);
+    state.globalDistortion.connect(state.masterGain);
     applyGlobalPitchShift();
     applyGlobalDelay();
+    applyGlobalDistortion();
   }
 }
 
@@ -671,6 +688,15 @@ function applyGlobalDelay() {
   state.globalDelay.delayTime.setValueAtTime(0.06 + (state.globalDelayTimeAmount * 0.54), now);
   state.globalDelay.feedback.setValueAtTime(0.08 + (state.globalDelayFeedbackAmount * 0.72), now);
   state.globalDelay.wet.setValueAtTime(state.globalDelayMixAmount * 0.85, now);
+}
+
+function applyGlobalDistortion() {
+  if (!state.globalDistortion) {
+    return;
+  }
+  const now = Tone.now();
+  state.globalDistortion.distortion = state.globalDistortionAmount * 0.95;
+  state.globalDistortion.wet.setValueAtTime(state.globalDistortionAmount * 0.9, now);
 }
 
 function applyVoiceSequencerStep(voice, time = Tone.now()) {
@@ -879,6 +905,12 @@ function setGlobalDelayFeedbackAmount(amount) {
 function setGlobalDelayMixAmount(amount) {
   state.globalDelayMixAmount = clamp(amount, 0, 1);
   applyGlobalDelay();
+  schedulePadDraw();
+}
+
+function setGlobalDistortionAmount(amount) {
+  state.globalDistortionAmount = clamp(amount, 0, 1);
+  applyGlobalDistortion();
   schedulePadDraw();
 }
 
@@ -1335,6 +1367,14 @@ async function handlePadDown(pointerId, position, options = {}) {
     } else if (controlAction.action === "global-delay") {
       state.topEffectView = "global-delay";
       schedulePadDraw();
+    } else if (controlAction.action === "global-distortion") {
+      state.controlDragByPointer.set(pointerId, "global-distortion");
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setGlobalDistortionAmount(amount);
     } else if (controlAction.action === "global-delay-back") {
       state.topEffectView = "global";
       schedulePadDraw();
@@ -1498,6 +1538,8 @@ function handlePadMove(pointerId, position) {
         setMetalAmountForTargets(amount);
       } else if (draggedControl === "global-pitch") {
         setGlobalPitchAmount(amount);
+      } else if (draggedControl === "global-distortion") {
+        setGlobalDistortionAmount(amount);
       } else if (draggedControl === "global-delay-time") {
         setGlobalDelayTimeAmount(amount);
       } else if (draggedControl === "global-delay-feedback") {
@@ -1707,7 +1749,7 @@ function drawPad() {
     if (
       control.action === "metal"
       || control.action === "global-pitch"
-      || control.action === "global-delay"
+      || control.action === "global-distortion"
       || control.action === "global-delay-time"
       || control.action === "global-delay-feedback"
       || control.action === "global-delay-mix"
@@ -1721,8 +1763,8 @@ function drawPad() {
         amount = getDisplayedMetalAmount();
       } else if (control.action === "global-pitch") {
         amount = getDisplayedGlobalPitchAmount();
-      } else if (control.action === "global-delay") {
-        amount = getDisplayedGlobalDelayAmount();
+      } else if (control.action === "global-distortion") {
+        amount = getDisplayedGlobalDistortionAmount();
       } else if (control.action === "global-delay-time") {
         amount = getDisplayedGlobalDelayTimeAmount();
       } else if (control.action === "global-delay-feedback") {
