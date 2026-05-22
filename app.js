@@ -90,16 +90,14 @@ function getPointerPosition(event) {
   };
 }
 
-function getSnakePosition({ x, y, width, height }) {
+function getGridPosition({ x, y, width, height }) {
   const { rows, cols, edoSteps, pitchSpread } = getGridConfig();
   const rowHeight = height / rows;
   const normalizedRow = clamp(y / rowHeight, 0, rows - 1e-6);
   const row = Math.floor(normalizedRow);
   const xNorm = clamp(x / width, 0, 1);
-  const isReversed = row % 2 === 1;
-  const rowProgress = isReversed ? 1 - xNorm : xNorm;
   const totalCells = rows * cols;
-  const continuousCell = row * cols + rowProgress * (cols - 1);
+  const continuousCell = row * cols + xNorm * (cols - 1);
   const centeredSteps = continuousCell - (totalCells - 1) / 2;
   const scaledSteps = centeredSteps * pitchSpread;
 
@@ -227,14 +225,14 @@ function createVoice(pointerPosition, options = {}) {
   const duration = Math.min(sample.buffer.duration, randomBetween(sliceMin, sliceMax));
   const maxOffset = Math.max(0, sample.buffer.duration - duration);
   const offset = maxOffset > 0 ? Math.random() * maxOffset : 0;
-  const snake = getSnakePosition(pointerPosition);
+  const grid = getGridPosition(pointerPosition);
 
   const source = new Tone.ToneBufferSource({
     url: sample.buffer,
     loop: true,
     loopStart: offset,
     loopEnd: Math.min(sample.buffer.duration, offset + duration),
-    playbackRate: snake.pitchRatio,
+    playbackRate: grid.pitchRatio,
   });
   const gain = new Tone.Gain(0.0001).connect(state.masterGain);
   source.connect(gain);
@@ -294,10 +292,10 @@ function updateVoicePitch(voice, pointerPosition) {
     return;
   }
 
-  const snake = getSnakePosition(pointerPosition);
+  const grid = getGridPosition(pointerPosition);
   voice.pointerPosition = pointerPosition;
   voice.source.playbackRate.cancelAndHoldAtTime(Tone.now());
-  voice.source.playbackRate.linearRampTo(snake.pitchRatio, 0.03);
+  voice.source.playbackRate.linearRampTo(grid.pitchRatio, 0.03);
   updateVoiceReadout();
   drawPad();
 }
@@ -361,11 +359,9 @@ function drawPad() {
     if (row === 0) {
       ctx.moveTo(0, y);
     } else {
-      const previousX = row % 2 === 0 ? 0 : width;
-      ctx.lineTo(previousX, y);
+      ctx.lineTo(0, y);
     }
-    const endX = row % 2 === 0 ? width : 0;
-    ctx.lineTo(endX, y);
+    ctx.lineTo(width, y);
   }
   ctx.stroke();
 
