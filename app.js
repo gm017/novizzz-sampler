@@ -745,6 +745,7 @@ function bindPressAction(element, action) {
 
   const triggerAction = (event) => {
     event.preventDefault();
+    event.stopPropagation();
     const now = performance.now();
     if (now - lastActionTime < 250) {
       return;
@@ -753,7 +754,6 @@ function bindPressAction(element, action) {
     action();
   };
 
-  element.addEventListener("pointerdown", triggerAction);
   element.addEventListener("touchstart", triggerAction, { passive: false });
   element.addEventListener("mousedown", triggerAction);
   element.addEventListener("click", (event) => {

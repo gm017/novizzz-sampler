@@ -30,6 +30,7 @@ body {
 #modeButton,
 #holdCurrentButton {
   font: inherit;
+  touch-action: manipulation;
 }
 
 #audioStatus {
