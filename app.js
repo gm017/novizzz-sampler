@@ -39,8 +39,11 @@ const state = {
   lastHoldTap: null,
   interactionMode: "play",
   selectedHoldId: null,
+  topEffectView: "main",
   liveMetalAmount: 0.35,
-  liveDelayAmount: 0.18,
+  liveDelayTimeAmount: 0.18,
+  liveDelayFeedbackAmount: 0.18,
+  liveDelayMixAmount: 0.18,
   liveDistortionAmount: 0.12,
   nextHoldId: 1,
   mode: "free",
@@ -129,10 +132,50 @@ function getTopControlRegions(width) {
   const laneHeight = TOP_CONTROL_LANE_HEIGHT;
   const inset = 14;
   const gap = 10;
-  const usableWidth = Math.max(0, width - inset * 2 - gap * 2);
-  const controlWidth = usableWidth / 3;
   const controlY = laneTop + 10;
   const controlHeight = Math.max(28, laneHeight - 20);
+
+  if (state.topEffectView === "delay") {
+    const usableWidth = Math.max(0, width - inset * 2 - gap * 3);
+    const controlWidth = usableWidth / 4;
+    return [
+      {
+        action: "delay-back",
+        label: "Back",
+        x: inset,
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+      {
+        action: "delay-time",
+        label: `Time ${getDisplayedDelayTimeAmount().toFixed(2)}`,
+        x: inset + (controlWidth + gap),
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+      {
+        action: "delay-feedback",
+        label: `Fdbk ${getDisplayedDelayFeedbackAmount().toFixed(2)}`,
+        x: inset + (controlWidth + gap) * 2,
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+      {
+        action: "delay-mix",
+        label: `Mix ${getDisplayedDelayMixAmount().toFixed(2)}`,
+        x: inset + (controlWidth + gap) * 3,
+        y: controlY,
+        width: controlWidth,
+        height: controlHeight,
+      },
+    ];
+  }
+
+  const usableWidth = Math.max(0, width - inset * 2 - gap * 2);
+  const controlWidth = usableWidth / 3;
 
   return [
     {
@@ -224,13 +267,7 @@ function getDisplayedMetalAmount() {
 }
 
 function getDisplayedDelayAmount() {
-  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
-    const voice = state.holdVoices.get(state.selectedHoldId);
-    if (voice) {
-      return voice.delayAmount;
-    }
-  }
-  return state.liveDelayAmount;
+  return (getDisplayedDelayTimeAmount() + getDisplayedDelayFeedbackAmount() + getDisplayedDelayMixAmount()) / 3;
 }
 
 function getDisplayedDistortionAmount() {
@@ -241,6 +278,36 @@ function getDisplayedDistortionAmount() {
     }
   }
   return state.liveDistortionAmount;
+}
+
+function getDisplayedDelayTimeAmount() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice) {
+      return voice.delayTimeAmount;
+    }
+  }
+  return state.liveDelayTimeAmount;
+}
+
+function getDisplayedDelayFeedbackAmount() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice) {
+      return voice.delayFeedbackAmount;
+    }
+  }
+  return state.liveDelayFeedbackAmount;
+}
+
+function getDisplayedDelayMixAmount() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice) {
+      return voice.delayMixAmount;
+    }
+  }
+  return state.liveDelayMixAmount;
 }
 
 function getGridPosition({ x, y, width, height }) {
@@ -339,9 +406,9 @@ function applyVoiceDelay(voice) {
     return;
   }
   const now = Tone.now();
-  voice.delayNode.delayTime.setValueAtTime(0.04 + (voice.delayAmount * 0.36), now);
-  voice.delayNode.feedback.setValueAtTime(0.08 + (voice.delayAmount * 0.72), now);
-  voice.delayNode.wet.setValueAtTime(voice.delayAmount * 0.85, now);
+  voice.delayNode.delayTime.setValueAtTime(0.04 + (voice.delayTimeAmount * 0.36), now);
+  voice.delayNode.feedback.setValueAtTime(0.08 + (voice.delayFeedbackAmount * 0.72), now);
+  voice.delayNode.wet.setValueAtTime(voice.delayMixAmount * 0.85, now);
 }
 
 function applyVoiceDistortion(voice) {
@@ -405,15 +472,90 @@ function setDelayAmountForTargets(amount) {
     if (!selectedVoice) {
       return;
     }
-    selectedVoice.delayAmount = nextAmount;
+    selectedVoice.delayTimeAmount = nextAmount;
+    selectedVoice.delayFeedbackAmount = nextAmount;
+    selectedVoice.delayMixAmount = nextAmount;
     applyVoiceDelay(selectedVoice);
     schedulePadDraw();
     return;
   }
 
-  state.liveDelayAmount = nextAmount;
+  state.liveDelayTimeAmount = nextAmount;
+  state.liveDelayFeedbackAmount = nextAmount;
+  state.liveDelayMixAmount = nextAmount;
   for (const voice of targets) {
-    voice.delayAmount = nextAmount;
+    voice.delayTimeAmount = nextAmount;
+    voice.delayFeedbackAmount = nextAmount;
+    voice.delayMixAmount = nextAmount;
+    applyVoiceDelay(voice);
+  }
+  schedulePadDraw();
+}
+
+function setDelayTimeAmountForTargets(amount) {
+  const nextAmount = clamp(amount, 0, 1);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice) {
+      return;
+    }
+    selectedVoice.delayTimeAmount = nextAmount;
+    applyVoiceDelay(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveDelayTimeAmount = nextAmount;
+  for (const voice of targets) {
+    voice.delayTimeAmount = nextAmount;
+    applyVoiceDelay(voice);
+  }
+  schedulePadDraw();
+}
+
+function setDelayFeedbackAmountForTargets(amount) {
+  const nextAmount = clamp(amount, 0, 1);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice) {
+      return;
+    }
+    selectedVoice.delayFeedbackAmount = nextAmount;
+    applyVoiceDelay(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveDelayFeedbackAmount = nextAmount;
+  for (const voice of targets) {
+    voice.delayFeedbackAmount = nextAmount;
+    applyVoiceDelay(voice);
+  }
+  schedulePadDraw();
+}
+
+function setDelayMixAmountForTargets(amount) {
+  const nextAmount = clamp(amount, 0, 1);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice) {
+      return;
+    }
+    selectedVoice.delayMixAmount = nextAmount;
+    applyVoiceDelay(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveDelayMixAmount = nextAmount;
+  for (const voice of targets) {
+    voice.delayMixAmount = nextAmount;
     applyVoiceDelay(voice);
   }
   schedulePadDraw();
@@ -544,7 +686,9 @@ function createVoice(pointerPosition, options = {}) {
     pointerPosition,
     basePlaybackRate: grid.pitchRatio,
     metalAmount: state.liveMetalAmount,
-    delayAmount: state.liveDelayAmount,
+    delayTimeAmount: state.liveDelayTimeAmount,
+    delayFeedbackAmount: state.liveDelayFeedbackAmount,
+    delayMixAmount: state.liveDelayMixAmount,
     distortionAmount: state.liveDistortionAmount,
   };
   applyVoiceMetal(voice);
@@ -746,7 +890,6 @@ async function handlePadDown(pointerId, position, options = {}) {
     } else if (controlAction.action === "edit-held") {
       toggleEditHeldMode();
     } else if (controlAction.action === "metal") {
-      state.controlDragByPointer ??= new Map();
       state.controlDragByPointer.set(pointerId, "metal");
       const amount = clamp(
         (position.x - controlAction.x) / Math.max(1, controlAction.width),
@@ -755,13 +898,35 @@ async function handlePadDown(pointerId, position, options = {}) {
       );
       setMetalAmountForTargets(amount);
     } else if (controlAction.action === "delay") {
-      state.controlDragByPointer.set(pointerId, "delay");
+      state.topEffectView = "delay";
+      schedulePadDraw();
+    } else if (controlAction.action === "delay-back") {
+      state.topEffectView = "main";
+      schedulePadDraw();
+    } else if (controlAction.action === "delay-time") {
+      state.controlDragByPointer.set(pointerId, "delay-time");
       const amount = clamp(
         (position.x - controlAction.x) / Math.max(1, controlAction.width),
         0,
         1,
       );
-      setDelayAmountForTargets(amount);
+      setDelayTimeAmountForTargets(amount);
+    } else if (controlAction.action === "delay-feedback") {
+      state.controlDragByPointer.set(pointerId, "delay-feedback");
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setDelayFeedbackAmountForTargets(amount);
+    } else if (controlAction.action === "delay-mix") {
+      state.controlDragByPointer.set(pointerId, "delay-mix");
+      const amount = clamp(
+        (position.x - controlAction.x) / Math.max(1, controlAction.width),
+        0,
+        1,
+      );
+      setDelayMixAmountForTargets(amount);
     } else if (controlAction.action === "distortion") {
       state.controlDragByPointer.set(pointerId, "distortion");
       const amount = clamp(
@@ -860,8 +1025,12 @@ function handlePadMove(pointerId, position) {
       );
       if (draggedControl === "metal") {
         setMetalAmountForTargets(amount);
-      } else if (draggedControl === "delay") {
-        setDelayAmountForTargets(amount);
+      } else if (draggedControl === "delay-time") {
+        setDelayTimeAmountForTargets(amount);
+      } else if (draggedControl === "delay-feedback") {
+        setDelayFeedbackAmountForTargets(amount);
+      } else if (draggedControl === "delay-mix") {
+        setDelayMixAmountForTargets(amount);
       } else if (draggedControl === "distortion") {
         setDistortionAmountForTargets(amount);
       }
@@ -1048,12 +1217,25 @@ function drawPad() {
     ctx.fillRect(control.x, control.y, control.width, control.height);
     ctx.strokeRect(control.x, control.y, control.width, control.height);
 
-    if (control.action === "metal" || control.action === "delay" || control.action === "distortion") {
+    if (
+      control.action === "metal"
+      || control.action === "delay"
+      || control.action === "distortion"
+      || control.action === "delay-time"
+      || control.action === "delay-feedback"
+      || control.action === "delay-mix"
+    ) {
       let amount = 0;
       if (control.action === "metal") {
         amount = getDisplayedMetalAmount();
       } else if (control.action === "delay") {
         amount = getDisplayedDelayAmount();
+      } else if (control.action === "delay-time") {
+        amount = getDisplayedDelayTimeAmount();
+      } else if (control.action === "delay-feedback") {
+        amount = getDisplayedDelayFeedbackAmount();
+      } else if (control.action === "delay-mix") {
+        amount = getDisplayedDelayMixAmount();
       } else if (control.action === "distortion") {
         amount = getDisplayedDistortionAmount();
       }
@@ -1230,6 +1412,7 @@ function cycleMode() {
   state.holdGestureByPointer.clear();
   state.soloPointers.clear();
   state.soloLeadPointerId = null;
+  state.topEffectView = "main";
   stopSoloVoice();
   state.padBackgroundCanvas = null;
   updateOutputLabels();
