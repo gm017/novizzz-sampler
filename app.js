@@ -37,6 +37,7 @@ const state = {
   soloPointers: new Map(),
   soloLeadPointerId: null,
   lastHoldTap: null,
+  lastInteractedHoldId: null,
   interactionMode: "play",
   selectedHoldId: null,
   topEffectView: "main",
@@ -62,6 +63,13 @@ function getNextHoldId() {
   const holdId = state.nextHoldId;
   state.nextHoldId += 1;
   return holdId;
+}
+
+function setLastInteractedHoldId(holdId) {
+  if (holdId !== null && !state.holdVoices.has(holdId)) {
+    return;
+  }
+  state.lastInteractedHoldId = holdId;
 }
 
 function setAudioStatus(message) {
@@ -781,6 +789,9 @@ function stopVoiceCollection(collection, key) {
   if (collection === state.holdVoices && state.selectedHoldId === key) {
     state.selectedHoldId = null;
   }
+  if (collection === state.holdVoices && state.lastInteractedHoldId === key) {
+    setLastInteractedHoldId(null);
+  }
   schedulePadDraw();
 }
 
@@ -945,6 +956,7 @@ function createHoldVoice(pointerPosition) {
     return null;
   }
   state.holdVoices.set(holdId, voice);
+  setLastInteractedHoldId(holdId);
   schedulePadDraw();
   return holdId;
 }
@@ -979,6 +991,7 @@ function promoteVoiceToHold(voice) {
   voice.id = holdId;
   voice.isHeld = true;
   state.holdVoices.set(holdId, voice);
+  setLastInteractedHoldId(holdId);
   return holdId;
 }
 
@@ -1007,6 +1020,11 @@ function holdCurrentVoices() {
 function toggleEditHeldMode() {
   if (state.interactionMode === "play") {
     state.interactionMode = "edit";
+    if (state.lastInteractedHoldId !== null && state.holdVoices.has(state.lastInteractedHoldId)) {
+      state.selectedHoldId = state.lastInteractedHoldId;
+    } else {
+      state.selectedHoldId = null;
+    }
   } else {
     state.interactionMode = "play";
     state.selectedHoldId = null;
@@ -1016,6 +1034,7 @@ function toggleEditHeldMode() {
 
 function selectHeldVoice(holdId) {
   state.selectedHoldId = holdId;
+  setLastInteractedHoldId(holdId);
   schedulePadDraw();
 }
 
@@ -1215,6 +1234,7 @@ async function handlePadDown(pointerId, position, options = {}) {
   if (state.mode === "hold") {
     const existingHoldId = findHoldVoiceAtPosition(position);
     if (existingHoldId !== null) {
+      setLastInteractedHoldId(existingHoldId);
       state.holdDragByPointer.set(pointerId, existingHoldId);
       state.holdGestureByPointer.set(pointerId, {
         holdId: existingHoldId,
@@ -1525,7 +1545,7 @@ function drawPad() {
   for (const voice of state.holdVoices.values()) {
     const { x, y } = voice.pointerPosition;
     const isSelected = voice.id === state.selectedHoldId;
-    ctx.strokeStyle = "#000";
+    ctx.strokeStyle = isSelected ? "#c00" : "#000";
     ctx.lineWidth = isSelected ? 3 : 1;
     ctx.beginPath();
     ctx.arc(x, y, isSelected ? 14 : 12, 0, Math.PI * 2);
