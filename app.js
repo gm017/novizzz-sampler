@@ -719,7 +719,7 @@ toggleUiButton.addEventListener("click", () => {
   toggleUiButton.textContent = isHidden ? "Show controls and info" : "Hide controls and info";
 });
 
-modeButton.addEventListener("click", () => {
+function cycleMode() {
   if (state.mode === "free") {
     state.mode = "hold";
   } else if (state.mode === "hold") {
@@ -734,10 +734,28 @@ modeButton.addEventListener("click", () => {
   state.soloPointers.clear();
   state.soloLeadPointerId = null;
   stopSoloVoice();
+}
+
+function activateHoldCurrent() {
+  holdCurrentVoices();
+}
+
+modeButton.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  cycleMode();
 });
 
-holdCurrentButton.addEventListener("click", () => {
-  holdCurrentVoices();
+holdCurrentButton.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  activateHoldCurrent();
+});
+
+modeButton.addEventListener("click", (event) => {
+  event.preventDefault();
+});
+
+holdCurrentButton.addEventListener("click", (event) => {
+  event.preventDefault();
 });
 
 updateOutputLabels();
