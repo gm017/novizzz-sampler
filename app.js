@@ -131,6 +131,12 @@ function getPlayableTop() {
   return TOP_CONTROL_LANE_HEIGHT;
 }
 
+function isPointerInPlayableArea({ y, height }) {
+  const playableTop = getPlayableTop();
+  const playableBottom = playableTop + getPlayableHeight(height);
+  return y >= playableTop && y <= playableBottom;
+}
+
 function getTopControlRegions(width) {
   const laneTop = 0;
   const laneHeight = TOP_CONTROL_LANE_HEIGHT;
@@ -532,6 +538,9 @@ function updateVoiceSequenceLoopRate(voice) {
 
 function getEditableHoldVoice() {
   if (state.selectedHoldId === null) {
+    if (state.holdVoices.size === 1) {
+      return [...state.holdVoices.values()][0];
+    }
     return null;
   }
   return state.holdVoices.get(state.selectedHoldId) ?? null;
@@ -1165,6 +1174,10 @@ async function handlePadDown(pointerId, position, options = {}) {
       updateOutputLabels();
       schedulePadDraw();
     }
+    return;
+  }
+
+  if (!isPointerInPlayableArea(position)) {
     return;
   }
 
