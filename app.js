@@ -787,6 +787,7 @@ function cycleMode() {
   state.soloPointers.clear();
   state.soloLeadPointerId = null;
   stopSoloVoice();
+  state.padBackgroundCanvas = null;
   drawPad();
 }
 
