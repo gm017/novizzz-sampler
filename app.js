@@ -36,6 +36,10 @@ const state = {
   soloPointers: new Map(),
   soloLeadPointerId: null,
   lastHoldTap: null,
+  controlDragByPointer: new Map(),
+  interactionMode: "play",
+  selectedHoldId: null,
+  liveMetalAmount: 0.35,
   nextHoldId: 1,
   mode: "free",
 };
@@ -116,27 +120,47 @@ function getPlayableHeight(height) {
 function getControlRegions(width, height) {
   const laneTop = getPlayableHeight(height);
   const laneHeight = height - laneTop;
-  const gap = 12;
+  const gap = 10;
   const inset = 14;
-  const usableWidth = Math.max(0, width - inset * 2 - gap);
-  const buttonWidth = usableWidth / 2;
+  const usableWidth = Math.max(0, width - inset * 2 - gap * 3);
+  const unitWidth = usableWidth / 6;
+  const buttonWidth = unitWidth;
+  const sliderWidth = unitWidth * 3;
+  const controlY = laneTop + 10;
+  const controlHeight = Math.max(28, laneHeight - 20);
 
   return [
     {
       action: "mode",
       label: `Mode: ${state.mode.charAt(0).toUpperCase()}${state.mode.slice(1)}`,
       x: inset,
-      y: laneTop + 10,
+      y: controlY,
       width: buttonWidth,
-      height: Math.max(28, laneHeight - 20),
+      height: controlHeight,
     },
     {
-      action: "hold-current",
-      label: "Hold Current",
+      action: "hold",
+      label: "Hold",
       x: inset + buttonWidth + gap,
-      y: laneTop + 10,
+      y: controlY,
       width: buttonWidth,
-      height: Math.max(28, laneHeight - 20),
+      height: controlHeight,
+    },
+    {
+      action: "edit-held",
+      label: state.interactionMode === "edit" ? "Edit: On" : "Edit: Off",
+      x: inset + (buttonWidth + gap) * 2,
+      y: controlY,
+      width: buttonWidth,
+      height: controlHeight,
+    },
+    {
+      action: "metal",
+      label: `Metal ${getDisplayedMetalAmount().toFixed(2)}`,
+      x: inset + (buttonWidth + gap) * 3,
+      y: controlY,
+      width: sliderWidth,
+      height: controlHeight,
     },
   ];
 }
@@ -149,6 +173,21 @@ function getControlActionAtPosition(pointerPosition) {
     && pointerPosition.y >= control.y
     && pointerPosition.y <= control.y + control.height
   )) ?? null;
+}
+
+function getDisplayedMetalAmount() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice) {
+      return voice.metalAmount;
+    }
+  }
+  return state.liveMetalAmount;
+}
+
+function getMetalAmountForControlPosition(pointerPosition, control) {
+  const normalized = clamp((pointerPosition.x - control.x) / Math.max(1, control.width), 0, 1);
+  return normalized;
 }
 
 function getGridPosition({ x, y, width, height }) {
@@ -217,6 +256,73 @@ function renderSampleBank() {
   }
 }
 
+function getVoiceMetalFrequency(basePlaybackRate, amount) {
+  return 60 + (amount * 640) + (basePlaybackRate * 20);
+}
+
+function getVoiceMetalDepth(basePlaybackRate, amount) {
+  return basePlaybackRate * amount * 1.8;
+}
+
+function applyVoiceMetal(voice) {
+  if (!voice || !voice.modOsc || !voice.modGain) {
+    return;
+  }
+
+  const now = Tone.now();
+  voice.modOsc.frequency.setValueAtTime(
+    getVoiceMetalFrequency(voice.basePlaybackRate, voice.metalAmount),
+    now,
+  );
+  voice.modGain.gain.setValueAtTime(
+    getVoiceMetalDepth(voice.basePlaybackRate, voice.metalAmount),
+    now,
+  );
+}
+
+function getEditableHoldVoice() {
+  if (state.selectedHoldId === null) {
+    return null;
+  }
+  return state.holdVoices.get(state.selectedHoldId) ?? null;
+}
+
+function getEffectTargetVoices() {
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    return selectedVoice ? [selectedVoice] : [];
+  }
+
+  const targets = [...state.transientVoices.values()];
+  if (state.soloVoice) {
+    targets.push(state.soloVoice);
+  }
+  return targets;
+}
+
+function setMetalAmountForTargets(amount) {
+  const nextAmount = clamp(amount, 0, 1);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice) {
+      return;
+    }
+    selectedVoice.metalAmount = nextAmount;
+    applyVoiceMetal(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveMetalAmount = nextAmount;
+  for (const voice of targets) {
+    voice.metalAmount = nextAmount;
+    applyVoiceMetal(voice);
+  }
+  schedulePadDraw();
+}
+
 function stopVoiceCollection(collection, key) {
   const voice = collection.get(key);
   if (!voice) {
@@ -228,6 +334,9 @@ function stopVoiceCollection(collection, key) {
   voice.gain.gain.linearRampTo(0.0001, 0.05, now);
   voice.source.stop(now + 0.06);
   collection.delete(key);
+  if (collection === state.holdVoices && state.selectedHoldId === key) {
+    state.selectedHoldId = null;
+  }
   schedulePadDraw();
 }
 
@@ -272,24 +381,41 @@ function createVoice(pointerPosition, options = {}) {
     loopEnd: Math.min(sample.buffer.duration, offset + duration),
     playbackRate: grid.pitchRatio,
   });
+  const modGain = new Tone.Gain(0);
+  const modOsc = new Tone.Oscillator({
+    type: "sine",
+    frequency: getVoiceMetalFrequency(grid.pitchRatio, state.liveMetalAmount),
+  });
   const gain = new Tone.Gain(0.0001).connect(state.masterGain);
+  modOsc.connect(modGain);
+  modGain.connect(source.playbackRate);
   source.connect(gain);
   source.onended = () => {
+    modOsc.dispose();
+    modGain.dispose();
     source.dispose();
     gain.dispose();
   };
 
+  modOsc.start();
   gain.gain.linearRampTo(0.9, 0.01);
   source.start(Tone.now(), offset);
 
-  return {
+  const voice = {
     id: options.id ?? null,
     isHeld: Boolean(options.isHeld),
     sample,
     source,
     gain,
+    modOsc,
+    modGain,
     pointerPosition,
+    basePlaybackRate: grid.pitchRatio,
+    metalAmount: state.liveMetalAmount,
   };
+  applyVoiceMetal(voice);
+
+  return voice;
 }
 
 function storeTransientVoice(pointerId, pointerPosition) {
@@ -332,8 +458,10 @@ function updateVoicePitch(voice, pointerPosition) {
 
   const grid = getGridPosition(pointerPosition);
   voice.pointerPosition = pointerPosition;
+  voice.basePlaybackRate = grid.pitchRatio;
   voice.source.playbackRate.cancelAndHoldAtTime(Tone.now());
   voice.source.playbackRate.setValueAtTime(grid.pitchRatio, Tone.now());
+  applyVoiceMetal(voice);
   schedulePadDraw();
 }
 
@@ -369,6 +497,21 @@ function holdCurrentVoices() {
   if (didHoldVoice) {
     schedulePadDraw();
   }
+}
+
+function toggleEditHeldMode() {
+  if (state.interactionMode === "play") {
+    state.interactionMode = "edit";
+  } else {
+    state.interactionMode = "play";
+    state.selectedHoldId = null;
+  }
+  schedulePadDraw();
+}
+
+function selectHeldVoice(holdId) {
+  state.selectedHoldId = holdId;
+  schedulePadDraw();
 }
 
 function renderStaticPadBackground() {
@@ -456,8 +599,24 @@ async function handlePadDown(pointerId, position, options = {}) {
   if (controlAction) {
     if (controlAction.action === "mode") {
       cycleMode();
-    } else if (controlAction.action === "hold-current") {
+    } else if (controlAction.action === "hold") {
       holdCurrentVoices();
+    } else if (controlAction.action === "edit-held") {
+      toggleEditHeldMode();
+    } else if (controlAction.action === "metal") {
+      state.controlDragByPointer.set(pointerId, "metal");
+      setMetalAmountForTargets(getMetalAmountForControlPosition(position, controlAction));
+    }
+    return;
+  }
+
+  if (state.interactionMode === "edit") {
+    const holdId = findHoldVoiceAtPosition(position);
+    if (holdId !== null) {
+      selectHeldVoice(holdId);
+    } else {
+      state.selectedHoldId = null;
+      schedulePadDraw();
     }
     return;
   }
@@ -524,6 +683,16 @@ async function handlePadDown(pointerId, position, options = {}) {
 }
 
 function handlePadMove(pointerId, position) {
+  const activeControl = state.controlDragByPointer.get(pointerId);
+  if (activeControl === "metal") {
+    const metalControl = getControlRegions(position.width, position.height)
+      .find((control) => control.action === "metal");
+    if (metalControl) {
+      setMetalAmountForTargets(getMetalAmountForControlPosition(position, metalControl));
+    }
+    return;
+  }
+
   if (state.mode === "solo") {
     const pointerState = state.soloPointers.get(pointerId);
     if (!pointerState) {
@@ -563,6 +732,8 @@ function handlePadMove(pointerId, position) {
 }
 
 function handlePadUp(pointerId, buttons = 0) {
+  state.controlDragByPointer.delete(pointerId);
+
   if (state.mode === "solo") {
     state.soloPointers.delete(pointerId);
 
@@ -616,6 +787,8 @@ function handlePadUp(pointerId, buttons = 0) {
 }
 
 function handlePadCancel(pointerId) {
+  state.controlDragByPointer.delete(pointerId);
+
   if (state.mode === "solo") {
     state.soloPointers.delete(pointerId);
 
@@ -645,6 +818,13 @@ function handlePadCancel(pointerId) {
 }
 
 function handlePadLeave(pointerId, buttons = 0) {
+  if (state.controlDragByPointer.has(pointerId)) {
+    if (buttons === 0) {
+      state.controlDragByPointer.delete(pointerId);
+    }
+    return;
+  }
+
   if (state.mode === "solo") {
     if (buttons === 0) {
       handlePadCancel(pointerId);
@@ -684,21 +864,35 @@ function drawPad() {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (const control of controlRegions) {
-    ctx.fillStyle = "#fff";
+    const isActiveEditButton = control.action === "edit-held" && state.interactionMode === "edit";
+    ctx.fillStyle = isActiveEditButton ? "#ddd" : "#fff";
     ctx.strokeStyle = "#000";
     ctx.lineWidth = 1;
     ctx.fillRect(control.x, control.y, control.width, control.height);
     ctx.strokeRect(control.x, control.y, control.width, control.height);
+
+    if (control.action === "metal") {
+      const amount = getDisplayedMetalAmount();
+      ctx.fillStyle = "#000";
+      ctx.fillRect(control.x + 4, control.y + control.height - 10, (control.width - 8) * amount, 6);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(control.x + 4 + (control.width - 8) * amount, control.y + control.height - 10,
+        Math.max(0, control.width - 8 - (control.width - 8) * amount), 6);
+      ctx.strokeStyle = "#000";
+      ctx.strokeRect(control.x + 4, control.y + control.height - 10, control.width - 8, 6);
+    }
+
     ctx.fillStyle = "#000";
     ctx.fillText(control.label, control.x + control.width / 2, control.y + control.height / 2);
   }
 
   for (const voice of state.holdVoices.values()) {
     const { x, y } = voice.pointerPosition;
+    const isSelected = voice.id === state.selectedHoldId;
     ctx.strokeStyle = "#000";
-    ctx.lineWidth = 1;
+    ctx.lineWidth = isSelected ? 3 : 1;
     ctx.beginPath();
-    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.arc(x, y, isSelected ? 14 : 12, 0, Math.PI * 2);
     ctx.stroke();
     ctx.beginPath();
     ctx.moveTo(x - 6, y);
