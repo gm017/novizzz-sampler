@@ -32,6 +32,7 @@ const state = {
   transientVoices: new Map(),
   holdVoices: new Map(),
   holdDragByPointer: new Map(),
+  lastHoldTap: null,
   nextHoldId: 1,
   mode: "free",
 };
@@ -199,6 +200,10 @@ function stopVoiceCollection(collection, key) {
 
 function stopTransientVoice(pointerId) {
   stopVoiceCollection(state.transientVoices, pointerId);
+}
+
+function stopHoldVoice(holdId) {
+  stopVoiceCollection(state.holdVoices, holdId);
 }
 
 function createVoice(pointerPosition, options = {}) {
@@ -396,7 +401,32 @@ canvas.addEventListener("pointerdown", async (event) => {
   canvas.setPointerCapture(event.pointerId);
 
   if (state.mode === "hold") {
-    const holdId = findHoldVoiceAtPosition(position) ?? createHoldVoice(position);
+    const existingHoldId = findHoldVoiceAtPosition(position);
+    if (existingHoldId !== null) {
+      const now = performance.now();
+      const isDoubleTap = state.lastHoldTap
+        && state.lastHoldTap.holdId === existingHoldId
+        && now - state.lastHoldTap.time < 300;
+
+      state.lastHoldTap = { holdId: existingHoldId, time: now };
+
+      if (isDoubleTap) {
+        stopHoldVoice(existingHoldId);
+        state.holdDragByPointer.delete(event.pointerId);
+        state.lastHoldTap = null;
+        return;
+      }
+
+      state.holdDragByPointer.set(event.pointerId, existingHoldId);
+      const voice = state.holdVoices.get(existingHoldId);
+      if (voice) {
+        updateVoicePitch(voice, position);
+      }
+      return;
+    }
+
+    state.lastHoldTap = null;
+    const holdId = createHoldVoice(position);
     if (holdId !== null) {
       state.holdDragByPointer.set(event.pointerId, holdId);
       const voice = state.holdVoices.get(holdId);
