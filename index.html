@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Novizzz Sampler</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <button id="toggleUiButton" type="button">Hide controls and info</button>
+
+    <p id="audioStatus" class="ui-panel">Waiting for gesture</p>
+
+    <section class="controls ui-panel">
+      <label class="file-picker">
+        <span>Load sample bank folder</span>
+        <input id="sampleInput" type="file" accept="audio/*" multiple webkitdirectory directory>
+      </label>
+
+      <label>
+        <span>Slice min</span>
+        <input id="sliceMin" type="range" min="0.08" max="2" step="0.01" value="0.18">
+        <output id="sliceMinValue">0.18s</output>
+      </label>
+
+      <label>
+        <span>Slice max</span>
+        <input id="sliceMax" type="range" min="0.12" max="4" step="0.01" value="0.75">
+        <output id="sliceMaxValue">0.75s</output>
+      </label>
+
+      <label>
+        <span>EDO steps / octave</span>
+        <input id="edoSteps" type="range" min="5" max="53" step="1" value="19">
+        <output id="edoStepsValue">19</output>
+      </label>
+
+      <label>
+        <span>Rows</span>
+        <input id="gridRows" type="range" min="4" max="16" step="1" value="8">
+        <output id="gridRowsValue">8</output>
+      </label>
+
+      <label>
+        <span>Columns</span>
+        <input id="gridCols" type="range" min="4" max="16" step="1" value="8">
+        <output id="gridColsValue">8</output>
+      </label>
+
+      <label>
+        <span>Pitch spread</span>
+        <input id="pitchSpread" type="range" min="0.25" max="2" step="0.01" value="1">
+        <output id="pitchSpreadValue">1.00x</output>
+      </label>
+    </section>
+
+    <section class="pad-wrap">
+      <canvas id="touchPad" width="1200" height="800" aria-label="Sampler touch pad"></canvas>
+      <div class="pad-overlay ui-panel">
+        <div id="voiceReadout">No active voices</div>
+      </div>
+    </section>
+
+    <section class="bank-panel ui-panel">
+      <div>
+        <h2>Sample bank</h2>
+        <p id="bankSummary">No samples loaded</p>
+      </div>
+      <ul id="sampleList"></ul>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

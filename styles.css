@@ -1,0 +1,197 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Times New Roman", Times, serif;
+  color: #000;
+  background: #fff;
+}
+
+.app-shell {
+  width: min(1180px, calc(100vw - 24px));
+  margin: 0 auto;
+  padding: 16px 0 24px;
+}
+
+#toggleUiButton {
+  margin-bottom: 16px;
+  font: inherit;
+}
+
+#audioStatus {
+  margin: 0 0 16px;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: 1.8fr 1fr;
+  gap: 20px;
+  padding: 0;
+  margin-bottom: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 2rem;
+  line-height: 1.1;
+  max-width: none;
+}
+
+.lede {
+  margin-top: 14px;
+  max-width: 60ch;
+}
+
+.status-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 0;
+}
+
+.status-label {
+  font-size: 1rem;
+}
+
+.status-hint {
+  font-size: 1rem;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+  padding: 0;
+  margin-bottom: 18px;
+}
+
+.controls label,
+.file-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+}
+
+.controls span,
+.controls output {
+  font-size: 1rem;
+}
+
+.controls input[type="range"] {
+  width: 100%;
+}
+
+.file-picker {
+  justify-content: center;
+}
+
+.file-picker input {
+  width: 100%;
+}
+
+.pad-wrap {
+  position: relative;
+  margin-bottom: 18px;
+}
+
+#touchPad {
+  width: 100%;
+  height: min(72vh, 860px);
+  display: block;
+  border: 1px solid #000;
+  touch-action: none;
+}
+
+.pad-overlay {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #000;
+}
+
+.pad-overlay strong,
+.pad-overlay span,
+#voiceReadout {
+  display: block;
+}
+
+.pad-overlay span {
+  margin-top: 4px;
+  font-size: 1rem;
+}
+
+.bank-panel {
+  padding: 0;
+}
+
+body.ui-hidden .ui-panel,
+body.ui-hidden .hero {
+  display: none;
+}
+
+#bankSummary {
+  margin-top: 6px;
+}
+
+#sampleList {
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+#sampleList li {
+  padding: 4px 0;
+  border: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    width: min(100vw - 14px, 100%);
+    padding-top: 14px;
+  }
+
+  .controls {
+    grid-template-columns: 1fr;
+  }
+
+  .pad-overlay {
+    flex-direction: column;
+  }
+}
