@@ -148,15 +148,18 @@ function getTopControlRegions(width) {
   if (state.topEffectView === "sequencer") {
     const headerHeight = 24;
     const stepGap = 4;
-    const rateGap = 6;
+    const rateGap = 8;
     const rateY = controlY + headerHeight + 6;
-    const rateHeight = 24;
+    const rateHeight = 20;
     const stepsTop = rateY + rateHeight + 6;
     const stepAreaHeight = Math.max(24, controlHeight - headerHeight - rateHeight - 12);
     const rowGap = 6;
     const stepHeight = (stepAreaHeight - rowGap) / 2;
     const stepWidth = (Math.max(0, width - inset * 2 - stepGap * 7) / 8);
-    const rateButtonWidth = (Math.max(0, width - inset * 2 - 64 - gap - rateGap * 3) / 4);
+    const rateButtonWidth = Math.max(
+      28,
+      (Math.max(0, width - inset * 2 - 64 - gap - rateGap * 5) / 4),
+    );
     const controls = [
       {
         action: "sequencer-back",
@@ -327,8 +330,8 @@ function getControlActionAtPosition(pointerPosition) {
 }
 
 function getDisplayedMetalAmount() {
-  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
-    const voice = state.holdVoices.get(state.selectedHoldId);
+  if (state.interactionMode === "edit") {
+    const voice = getEditableHoldVoice();
     if (voice) {
       return voice.metalAmount;
     }
@@ -341,8 +344,8 @@ function getDisplayedDelayAmount() {
 }
 
 function getDisplayedDistortionAmount() {
-  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
-    const voice = state.holdVoices.get(state.selectedHoldId);
+  if (state.interactionMode === "edit") {
+    const voice = getEditableHoldVoice();
     if (voice) {
       return voice.distortionAmount;
     }
@@ -351,8 +354,8 @@ function getDisplayedDistortionAmount() {
 }
 
 function getDisplayedSequencePattern() {
-  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
-    const voice = state.holdVoices.get(state.selectedHoldId);
+  if (state.interactionMode === "edit") {
+    const voice = getEditableHoldVoice();
     if (voice?.sequencePattern) {
       return voice.sequencePattern;
     }
@@ -365,8 +368,8 @@ function getDisplayedSequenceOnCount() {
 }
 
 function getDisplayedSequenceRateMultiplier() {
-  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
-    const voice = state.holdVoices.get(state.selectedHoldId);
+  if (state.interactionMode === "edit") {
+    const voice = getEditableHoldVoice();
     if (voice?.sequenceRateMultiplier) {
       return voice.sequenceRateMultiplier;
     }
@@ -375,8 +378,8 @@ function getDisplayedSequenceRateMultiplier() {
 }
 
 function getDisplayedDelayTimeAmount() {
-  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
-    const voice = state.holdVoices.get(state.selectedHoldId);
+  if (state.interactionMode === "edit") {
+    const voice = getEditableHoldVoice();
     if (voice) {
       return voice.delayTimeAmount;
     }
@@ -385,8 +388,8 @@ function getDisplayedDelayTimeAmount() {
 }
 
 function getDisplayedDelayFeedbackAmount() {
-  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
-    const voice = state.holdVoices.get(state.selectedHoldId);
+  if (state.interactionMode === "edit") {
+    const voice = getEditableHoldVoice();
     if (voice) {
       return voice.delayFeedbackAmount;
     }
@@ -395,8 +398,8 @@ function getDisplayedDelayFeedbackAmount() {
 }
 
 function getDisplayedDelayMixAmount() {
-  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
-    const voice = state.holdVoices.get(state.selectedHoldId);
+  if (state.interactionMode === "edit") {
+    const voice = getEditableHoldVoice();
     if (voice) {
       return voice.delayMixAmount;
     }
@@ -538,8 +541,8 @@ function updateVoiceSequenceLoopRate(voice) {
 
 function getEditableHoldVoice() {
   if (state.selectedHoldId === null) {
-    if (state.holdVoices.size === 1) {
-      return [...state.holdVoices.values()][0];
+    if (state.holdVoices.size > 0) {
+      return [...state.holdVoices.values()][state.holdVoices.size - 1];
     }
     return null;
   }
@@ -820,6 +823,10 @@ function stopSoloVoice() {
 }
 
 function createVoice(pointerPosition, options = {}) {
+  if (!isPointerInPlayableArea(pointerPosition)) {
+    return null;
+  }
+
   const sample = chooseRandomSample();
   if (!sample || !state.masterGain) {
     return null;
@@ -1165,19 +1172,15 @@ async function handlePadDown(pointerId, position, options = {}) {
     return;
   }
 
+  if (!isPointerInPlayableArea(position)) {
+    return;
+  }
+
   if (state.interactionMode === "edit") {
     const holdId = findHoldVoiceAtPosition(position);
     if (holdId !== null) {
       selectHeldVoice(holdId);
-    } else {
-      state.selectedHoldId = null;
-      updateOutputLabels();
-      schedulePadDraw();
     }
-    return;
-  }
-
-  if (!isPointerInPlayableArea(position)) {
     return;
   }
 
