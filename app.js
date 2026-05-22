@@ -26,6 +26,7 @@ const outputs = {
 const state = {
   masterGain: null,
   padBackgroundCanvas: null,
+  drawScheduled: false,
   samples: [],
   transientVoices: new Map(),
   holdVoices: new Map(),
@@ -72,6 +73,17 @@ function resizeCanvas() {
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   state.padBackgroundCanvas = null;
   drawPad();
+}
+
+function schedulePadDraw() {
+  if (state.drawScheduled) {
+    return;
+  }
+  state.drawScheduled = true;
+  window.requestAnimationFrame(() => {
+    state.drawScheduled = false;
+    drawPad();
+  });
 }
 
 function getGridConfig() {
@@ -216,7 +228,7 @@ function stopVoiceCollection(collection, key) {
   voice.gain.gain.linearRampTo(0.0001, 0.05, now);
   voice.source.stop(now + 0.06);
   collection.delete(key);
-  drawPad();
+  schedulePadDraw();
 }
 
 function stopTransientVoice(pointerId) {
@@ -237,7 +249,7 @@ function stopSoloVoice() {
   state.soloVoice.gain.gain.linearRampTo(0.0001, 0.05, now);
   state.soloVoice.source.stop(now + 0.06);
   state.soloVoice = null;
-  drawPad();
+  schedulePadDraw();
 }
 
 function createVoice(pointerPosition, options = {}) {
@@ -286,7 +298,7 @@ function storeTransientVoice(pointerId, pointerPosition) {
     return;
   }
   state.transientVoices.set(pointerId, voice);
-  drawPad();
+  schedulePadDraw();
 }
 
 function startSoloVoice(pointerPosition) {
@@ -295,7 +307,7 @@ function startSoloVoice(pointerPosition) {
     return;
   }
   state.soloVoice = voice;
-  drawPad();
+  schedulePadDraw();
 }
 
 function createHoldVoice(pointerPosition) {
@@ -305,7 +317,7 @@ function createHoldVoice(pointerPosition) {
     return null;
   }
   state.holdVoices.set(holdId, voice);
-  drawPad();
+  schedulePadDraw();
   return holdId;
 }
 
@@ -322,7 +334,7 @@ function updateVoicePitch(voice, pointerPosition) {
   voice.pointerPosition = pointerPosition;
   voice.source.playbackRate.cancelAndHoldAtTime(Tone.now());
   voice.source.playbackRate.setValueAtTime(grid.pitchRatio, Tone.now());
-  drawPad();
+  schedulePadDraw();
 }
 
 function promoteVoiceToHold(voice) {
@@ -355,7 +367,7 @@ function holdCurrentVoices() {
   }
 
   if (didHoldVoice) {
-    drawPad();
+    schedulePadDraw();
   }
 }
 
@@ -454,7 +466,7 @@ async function handlePadDown(pointerId, position, options = {}) {
 
   if (!state.samples.length) {
     setAudioStatus("Load samples first");
-    drawPad();
+    schedulePadDraw();
     return;
   }
 
@@ -838,7 +850,7 @@ function cycleMode() {
   state.soloLeadPointerId = null;
   stopSoloVoice();
   state.padBackgroundCanvas = null;
-  drawPad();
+  schedulePadDraw();
 }
 
 updateOutputLabels();
