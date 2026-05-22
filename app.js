@@ -25,6 +25,7 @@ const outputs = {
 
 const state = {
   masterGain: null,
+  padBackgroundCanvas: null,
   samples: [],
   transientVoices: new Map(),
   holdVoices: new Map(),
@@ -69,6 +70,7 @@ function resizeCanvas() {
   canvas.width = Math.round(bounds.width * ratio);
   canvas.height = Math.round(bounds.height * ratio);
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  state.padBackgroundCanvas = null;
   drawPad();
 }
 
@@ -203,10 +205,6 @@ function renderSampleBank() {
   }
 }
 
-function updateVoiceReadout() {
-  // Readout removed; keep the call sites stable.
-}
-
 function stopVoiceCollection(collection, key) {
   const voice = collection.get(key);
   if (!voice) {
@@ -218,7 +216,6 @@ function stopVoiceCollection(collection, key) {
   voice.gain.gain.linearRampTo(0.0001, 0.05, now);
   voice.source.stop(now + 0.06);
   collection.delete(key);
-  updateVoiceReadout();
   drawPad();
 }
 
@@ -240,7 +237,6 @@ function stopSoloVoice() {
   state.soloVoice.gain.gain.linearRampTo(0.0001, 0.05, now);
   state.soloVoice.source.stop(now + 0.06);
   state.soloVoice = null;
-  updateVoiceReadout();
   drawPad();
 }
 
@@ -290,7 +286,6 @@ function storeTransientVoice(pointerId, pointerPosition) {
     return;
   }
   state.transientVoices.set(pointerId, voice);
-  updateVoiceReadout();
   drawPad();
 }
 
@@ -300,7 +295,6 @@ function startSoloVoice(pointerPosition) {
     return;
   }
   state.soloVoice = voice;
-  updateVoiceReadout();
   drawPad();
 }
 
@@ -311,7 +305,6 @@ function createHoldVoice(pointerPosition) {
     return null;
   }
   state.holdVoices.set(holdId, voice);
-  updateVoiceReadout();
   drawPad();
   return holdId;
 }
@@ -329,7 +322,6 @@ function updateVoicePitch(voice, pointerPosition) {
   voice.pointerPosition = pointerPosition;
   voice.source.playbackRate.cancelAndHoldAtTime(Tone.now());
   voice.source.playbackRate.linearRampTo(grid.pitchRatio, 0.015);
-  updateVoiceReadout();
   drawPad();
 }
 
@@ -363,9 +355,72 @@ function holdCurrentVoices() {
   }
 
   if (didHoldVoice) {
-    updateVoiceReadout();
     drawPad();
   }
+}
+
+function renderStaticPadBackground() {
+  const bounds = canvas.getBoundingClientRect();
+  const { rows, cols } = getGridConfig();
+  const width = Math.max(1, Math.round(bounds.width));
+  const height = Math.max(1, Math.round(bounds.height));
+  const playableHeight = getPlayableHeight(height);
+  const rowHeight = playableHeight / rows;
+  const colWidth = width / cols;
+
+  const backgroundCanvas = document.createElement("canvas");
+  backgroundCanvas.width = width;
+  backgroundCanvas.height = height;
+  const backgroundCtx = backgroundCanvas.getContext("2d");
+
+  backgroundCtx.fillStyle = "#fff";
+  backgroundCtx.fillRect(0, 0, width, height);
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      backgroundCtx.strokeStyle = "#000";
+      backgroundCtx.strokeRect(col * colWidth, row * rowHeight, colWidth, rowHeight);
+    }
+  }
+
+  backgroundCtx.lineWidth = 1;
+  backgroundCtx.strokeStyle = "#000";
+  backgroundCtx.beginPath();
+  for (let row = 0; row < rows; row += 1) {
+    const y = row * rowHeight + rowHeight / 2;
+    if (row === 0) {
+      backgroundCtx.moveTo(0, y);
+    } else {
+      backgroundCtx.lineTo(0, y);
+    }
+    backgroundCtx.lineTo(width, y);
+  }
+  backgroundCtx.stroke();
+
+  backgroundCtx.fillStyle = "#f1f1f1";
+  backgroundCtx.fillRect(0, playableHeight, width, height - playableHeight);
+  backgroundCtx.strokeStyle = "#000";
+  backgroundCtx.strokeRect(0, playableHeight, width, height - playableHeight);
+
+  const controlRegions = getControlRegions(width, height);
+  backgroundCtx.font = '16px "Times New Roman", Times, serif';
+  backgroundCtx.textAlign = "center";
+  backgroundCtx.textBaseline = "middle";
+  for (const control of controlRegions) {
+    backgroundCtx.fillStyle = "#fff";
+    backgroundCtx.strokeStyle = "#000";
+    backgroundCtx.lineWidth = 1;
+    backgroundCtx.fillRect(control.x, control.y, control.width, control.height);
+    backgroundCtx.strokeRect(control.x, control.y, control.width, control.height);
+    backgroundCtx.fillStyle = "#000";
+    backgroundCtx.fillText(
+      control.label,
+      control.x + control.width / 2,
+      control.y + control.height / 2,
+    );
+  }
+
+  state.padBackgroundCanvas = backgroundCanvas;
 }
 
 function findHoldVoiceAtPosition(pointerPosition) {
@@ -402,56 +457,17 @@ function getLastSoloPointerId(excludePointerId = null) {
 
 function drawPad() {
   const bounds = canvas.getBoundingClientRect();
-  const { rows, cols } = getGridConfig();
   const width = bounds.width;
   const height = bounds.height;
-  const playableHeight = getPlayableHeight(height);
-  const rowHeight = playableHeight / rows;
-  const colWidth = width / cols;
+
+  if (!state.padBackgroundCanvas
+    || state.padBackgroundCanvas.width !== Math.round(width)
+    || state.padBackgroundCanvas.height !== Math.round(height)) {
+    renderStaticPadBackground();
+  }
 
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, width, height);
-
-  for (let row = 0; row < rows; row += 1) {
-    for (let col = 0; col < cols; col += 1) {
-      ctx.strokeStyle = "#000";
-      ctx.strokeRect(col * colWidth, row * rowHeight, colWidth, rowHeight);
-    }
-  }
-
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = "#000";
-  ctx.beginPath();
-  for (let row = 0; row < rows; row += 1) {
-    const y = row * rowHeight + rowHeight / 2;
-    if (row === 0) {
-      ctx.moveTo(0, y);
-    } else {
-      ctx.lineTo(0, y);
-    }
-    ctx.lineTo(width, y);
-  }
-  ctx.stroke();
-
-  ctx.fillStyle = "#f1f1f1";
-  ctx.fillRect(0, playableHeight, width, height - playableHeight);
-  ctx.strokeStyle = "#000";
-  ctx.strokeRect(0, playableHeight, width, height - playableHeight);
-
-  const controlRegions = getControlRegions(width, height);
-  ctx.font = '16px "Times New Roman", Times, serif';
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  for (const control of controlRegions) {
-    ctx.fillStyle = "#fff";
-    ctx.strokeStyle = "#000";
-    ctx.lineWidth = 1;
-    ctx.fillRect(control.x, control.y, control.width, control.height);
-    ctx.strokeRect(control.x, control.y, control.width, control.height);
-    ctx.fillStyle = "#000";
-    ctx.fillText(control.label, control.x + control.width / 2, control.y + control.height / 2);
-  }
+  ctx.drawImage(state.padBackgroundCanvas, 0, 0, width, height);
 
   for (const voice of state.holdVoices.values()) {
     const { x, y } = voice.pointerPosition;
