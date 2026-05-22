@@ -47,13 +47,14 @@ const state = {
   liveDistortionAmount: 0.12,
   liveTremoloSpeedAmount: 0.0,
   liveTremoloMixAmount: 0.0,
+  liveSequencePattern: Array(16).fill(true),
   nextHoldId: 1,
   mode: "free",
 };
 
 const canvas = touchPad;
 const ctx = canvas.getContext("2d");
-const TOP_CONTROL_LANE_HEIGHT = 72;
+const TOP_CONTROL_LANE_HEIGHT = 112;
 const BOTTOM_CONTROL_LANE_HEIGHT = 72;
 
 function getNextHoldId() {
@@ -137,6 +138,42 @@ function getTopControlRegions(width) {
   const controlY = laneTop + 10;
   const controlHeight = Math.max(28, laneHeight - 20);
 
+  if (state.topEffectView === "sequencer") {
+    const headerHeight = 24;
+    const stepGap = 4;
+    const stepsTop = controlY + headerHeight + 6;
+    const stepAreaHeight = Math.max(32, controlHeight - headerHeight - 6);
+    const rowGap = 6;
+    const stepHeight = (stepAreaHeight - rowGap) / 2;
+    const stepWidth = (Math.max(0, width - inset * 2 - stepGap * 7) / 8);
+    const controls = [
+      {
+        action: "sequencer-back",
+        label: "Back",
+        x: inset,
+        y: controlY,
+        width: 64,
+        height: headerHeight,
+      },
+    ];
+
+    for (let index = 0; index < 16; index += 1) {
+      const row = Math.floor(index / 8);
+      const col = index % 8;
+      controls.push({
+        action: "sequencer-step",
+        stepIndex: index,
+        label: `${index + 1}`,
+        x: inset + col * (stepWidth + stepGap),
+        y: stepsTop + row * (stepHeight + rowGap),
+        width: stepWidth,
+        height: stepHeight,
+      });
+    }
+
+    return controls;
+  }
+
   if (state.topEffectView === "delay") {
     const usableWidth = Math.max(0, width - inset * 2 - gap * 3);
     const controlWidth = usableWidth / 4;
@@ -207,8 +244,8 @@ function getTopControlRegions(width) {
     ];
   }
 
-  const usableWidth = Math.max(0, width - inset * 2 - gap * 3);
-  const controlWidth = usableWidth / 4;
+  const usableWidth = Math.max(0, width - inset * 2 - gap * 4);
+  const controlWidth = usableWidth / 5;
 
   return [
     {
@@ -239,6 +276,14 @@ function getTopControlRegions(width) {
       action: "tremolo",
       label: `Trem ${getDisplayedTremoloMixAmount().toFixed(2)}`,
       x: inset + (controlWidth + gap) * 3,
+      y: controlY,
+      width: controlWidth,
+      height: controlHeight,
+    },
+    {
+      action: "sequencer",
+      label: `Seq ${getDisplayedSequenceOnCount()}/16`,
+      x: inset + (controlWidth + gap) * 4,
       y: controlY,
       width: controlWidth,
       height: controlHeight,
@@ -341,6 +386,20 @@ function getDisplayedTremoloMixAmount() {
   return state.liveTremoloMixAmount;
 }
 
+function getDisplayedSequencePattern() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice?.sequencePattern) {
+      return voice.sequencePattern;
+    }
+  }
+  return state.liveSequencePattern;
+}
+
+function getDisplayedSequenceOnCount() {
+  return getDisplayedSequencePattern().filter(Boolean).length;
+}
+
 function getDisplayedDelayTimeAmount() {
   if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
     const voice = state.holdVoices.get(state.selectedHoldId);
@@ -412,6 +471,10 @@ function initAudio() {
 async function ensureAudio() {
   initAudio();
   await Tone.start();
+  if (Tone.Transport.state !== "started") {
+    Tone.Transport.bpm.value = 120;
+    Tone.Transport.start();
+  }
 
   setAudioStatus("Running");
 }
@@ -489,6 +552,16 @@ function applyVoiceTremolo(voice) {
   voice.tremoloNode.frequency.setValueAtTime(0.6 + (voice.tremoloSpeedAmount * 32), now);
   voice.tremoloNode.depth.setValueAtTime(voice.tremoloMixAmount, now);
   voice.tremoloNode.wet.setValueAtTime(voice.tremoloMixAmount * 0.95, now);
+}
+
+function applyVoiceSequencerStep(voice, time = Tone.now()) {
+  if (!voice?.sequenceGateGain?.gain || !voice.sequencePattern?.length) {
+    return;
+  }
+  const stepTicks = Tone.Time("16n").toTicks();
+  const stepIndex = Math.floor(Tone.Transport.getTicksAtTime(time) / stepTicks) % voice.sequencePattern.length;
+  const isOn = voice.sequencePattern[stepIndex] !== false;
+  voice.sequenceGateGain.gain.setValueAtTime(isOn ? 1 : 0, time);
 }
 
 function getEditableHoldVoice() {
@@ -695,6 +768,31 @@ function setTremoloMixAmountForTargets(amount) {
   schedulePadDraw();
 }
 
+function setSequenceStepEnabled(stepIndex, isEnabled) {
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice?.sequencePattern) {
+      return;
+    }
+    selectedVoice.sequencePattern[stepIndex] = isEnabled;
+    applyVoiceSequencerStep(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveSequencePattern[stepIndex] = isEnabled;
+  for (const voice of targets) {
+    if (!voice.sequencePattern) {
+      continue;
+    }
+    voice.sequencePattern[stepIndex] = isEnabled;
+    applyVoiceSequencerStep(voice);
+  }
+  schedulePadDraw();
+}
+
 function stopVoiceCollection(collection, key) {
   const voice = collection.get(key);
   if (!voice) {
@@ -714,6 +812,12 @@ function stopVoiceCollection(collection, key) {
   }
   if (voice.tremoloNode?.wet) {
     voice.tremoloNode.wet.setValueAtTime(0, now);
+  }
+  if (voice.sequenceGateGain?.gain) {
+    voice.sequenceGateGain.gain.setValueAtTime(0, now);
+  }
+  if (voice.sequenceLoop) {
+    voice.sequenceLoop.stop(now);
   }
   voice.gain.gain.cancelAndHoldAtTime(now);
   voice.gain.gain.linearRampTo(0.0001, 0.05, now);
@@ -752,6 +856,12 @@ function stopSoloVoice() {
   }
   if (state.soloVoice.tremoloNode?.wet) {
     state.soloVoice.tremoloNode.wet.setValueAtTime(0, now);
+  }
+  if (state.soloVoice.sequenceGateGain?.gain) {
+    state.soloVoice.sequenceGateGain.gain.setValueAtTime(0, now);
+  }
+  if (state.soloVoice.sequenceLoop) {
+    state.soloVoice.sequenceLoop.stop(now);
   }
   state.soloVoice.gain.gain.cancelAndHoldAtTime(now);
   state.soloVoice.gain.gain.linearRampTo(0.0001, 0.05, now);
@@ -798,20 +908,31 @@ function createVoice(pointerPosition, options = {}) {
     spread: 0,
     wet: 0,
   });
+  const sequenceGateGain = new Tone.Gain(1);
   const gain = new Tone.Gain(0.0001);
   modOsc.connect(modGain);
   modGain.connect(source.playbackRate);
   source.connect(distortionNode);
   distortionNode.connect(delayNode);
   delayNode.connect(tremoloNode);
-  tremoloNode.connect(gain);
+  tremoloNode.connect(sequenceGateGain);
+  sequenceGateGain.connect(gain);
   gain.connect(state.masterGain);
+  const sequencePattern = [...state.liveSequencePattern];
+  const sequenceLoop = new Tone.Loop((time) => {
+    if (source.state === "stopped") {
+      return;
+    }
+    applyVoiceSequencerStep(voice, time);
+  }, "16n");
   source.onended = () => {
     modOsc.dispose();
     modGain.dispose();
     distortionNode.dispose();
     delayNode.dispose();
     tremoloNode.dispose();
+    sequenceGateGain.dispose();
+    sequenceLoop.dispose();
     source.dispose();
     gain.dispose();
   };
@@ -830,6 +951,8 @@ function createVoice(pointerPosition, options = {}) {
     distortionNode,
     delayNode,
     tremoloNode,
+    sequenceGateGain,
+    sequenceLoop,
     modOsc,
     modGain,
     pointerPosition,
@@ -841,11 +964,14 @@ function createVoice(pointerPosition, options = {}) {
     distortionAmount: state.liveDistortionAmount,
     tremoloSpeedAmount: state.liveTremoloSpeedAmount,
     tremoloMixAmount: state.liveTremoloMixAmount,
+    sequencePattern,
   };
   applyVoiceMetal(voice);
   applyVoiceDelay(voice);
   applyVoiceDistortion(voice);
   applyVoiceTremolo(voice);
+  applyVoiceSequencerStep(voice);
+  sequenceLoop.start(0);
 
   return voice;
 }
@@ -1109,6 +1235,15 @@ async function handlePadDown(pointerId, position, options = {}) {
         1,
       );
       setTremoloMixAmountForTargets(amount);
+    } else if (controlAction.action === "sequencer") {
+      state.topEffectView = "sequencer";
+      schedulePadDraw();
+    } else if (controlAction.action === "sequencer-back") {
+      state.topEffectView = "main";
+      schedulePadDraw();
+    } else if (controlAction.action === "sequencer-step") {
+      const currentPattern = getDisplayedSequencePattern();
+      setSequenceStepEnabled(controlAction.stepIndex, !currentPattern[controlAction.stepIndex]);
     }
     return;
   }
@@ -1389,7 +1524,10 @@ function drawPad() {
   ctx.textBaseline = "middle";
   for (const control of [...topControlRegions, ...bottomControlRegions]) {
     const isActiveEdit = control.action === "edit-held" && state.interactionMode === "edit";
-    ctx.fillStyle = isActiveEdit ? "#ddd" : "#fff";
+    const isSequenceStep = control.action === "sequencer-step";
+    const sequencePattern = isSequenceStep ? getDisplayedSequencePattern() : null;
+    const isStepOn = isSequenceStep ? sequencePattern[control.stepIndex] !== false : false;
+    ctx.fillStyle = isSequenceStep ? (isStepOn ? "#000" : "#fff") : (isActiveEdit ? "#ddd" : "#fff");
     ctx.strokeStyle = "#000";
     ctx.lineWidth = 1;
     ctx.fillRect(control.x, control.y, control.width, control.height);
@@ -1488,7 +1626,7 @@ function drawPad() {
       });
     }
 
-    ctx.fillStyle = "#000";
+    ctx.fillStyle = isSequenceStep && isStepOn ? "#fff" : "#000";
     ctx.fillText(control.label, control.x + control.width / 2, control.y + control.height / 2);
   }
 
