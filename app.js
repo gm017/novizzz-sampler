@@ -267,7 +267,7 @@ function getDisplayedMetalAmount() {
 }
 
 function getDisplayedDelayAmount() {
-  return (getDisplayedDelayTimeAmount() + getDisplayedDelayFeedbackAmount() + getDisplayedDelayMixAmount()) / 3;
+  return getDisplayedDelayMixAmount();
 }
 
 function getDisplayedDistortionAmount() {
@@ -472,20 +472,14 @@ function setDelayAmountForTargets(amount) {
     if (!selectedVoice) {
       return;
     }
-    selectedVoice.delayTimeAmount = nextAmount;
-    selectedVoice.delayFeedbackAmount = nextAmount;
     selectedVoice.delayMixAmount = nextAmount;
     applyVoiceDelay(selectedVoice);
     schedulePadDraw();
     return;
   }
 
-  state.liveDelayTimeAmount = nextAmount;
-  state.liveDelayFeedbackAmount = nextAmount;
   state.liveDelayMixAmount = nextAmount;
   for (const voice of targets) {
-    voice.delayTimeAmount = nextAmount;
-    voice.delayFeedbackAmount = nextAmount;
     voice.delayMixAmount = nextAmount;
     applyVoiceDelay(voice);
   }
