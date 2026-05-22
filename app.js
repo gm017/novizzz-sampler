@@ -5,6 +5,7 @@ const bankSummary = document.getElementById("bankSummary");
 const sampleList = document.getElementById("sampleList");
 const voiceReadout = document.getElementById("voiceReadout");
 const toggleUiButton = document.getElementById("toggleUiButton");
+const modeButton = document.getElementById("modeButton");
 
 const controls = {
   sliceMin: document.getElementById("sliceMin"),
@@ -28,7 +29,11 @@ const state = {
   audioContext: null,
   masterGain: null,
   samples: [],
-  activeVoices: new Map(),
+  transientVoices: new Map(),
+  holdVoices: new Map(),
+  holdDragByPointer: new Map(),
+  nextHoldId: 1,
+  mode: "free",
 };
 
 const canvas = touchPad;
@@ -155,20 +160,29 @@ function renderSampleBank() {
   }
 }
 
+function getAllVoices() {
+  return [
+    ...state.holdVoices.values(),
+    ...state.transientVoices.values(),
+  ];
+}
+
 function updateVoiceReadout() {
-  if (!state.activeVoices.size) {
+  const voices = getAllVoices();
+  if (!voices.length) {
     voiceReadout.textContent = "No active voices";
     return;
   }
 
-  const voices = [...state.activeVoices.values()].map((voice) => {
-    return `${voice.sample.name} @ ${voice.source.playbackRate.value.toFixed(2)}x`;
+  const labels = voices.map((voice) => {
+    const prefix = voice.isHeld ? "H" : "F";
+    return `${prefix}:${voice.sample.name} @ ${voice.source.playbackRate.value.toFixed(2)}x`;
   });
-  voiceReadout.textContent = voices.join(" | ");
+  voiceReadout.textContent = labels.join(" | ");
 }
 
-function stopVoice(pointerId) {
-  const voice = state.activeVoices.get(pointerId);
+function stopVoiceCollection(collection, key) {
+  const voice = collection.get(key);
   if (!voice || !state.audioContext) {
     return;
   }
@@ -178,15 +192,19 @@ function stopVoice(pointerId) {
   voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
   voice.gain.gain.linearRampToValueAtTime(0.0001, now + 0.08);
   voice.source.stop(now + 0.09);
-  state.activeVoices.delete(pointerId);
+  collection.delete(key);
   updateVoiceReadout();
   drawPad();
 }
 
-function createVoice(pointerId, pointerPosition) {
+function stopTransientVoice(pointerId) {
+  stopVoiceCollection(state.transientVoices, pointerId);
+}
+
+function createVoice(pointerPosition, options = {}) {
   const sample = chooseRandomSample();
   if (!sample || !state.audioContext || !state.masterGain) {
-    return;
+    return null;
   }
 
   const sliceMin = Number(controls.sliceMin.value);
@@ -210,19 +228,41 @@ function createVoice(pointerId, pointerPosition) {
   source.connect(gain);
   gain.connect(state.masterGain);
   source.start(state.audioContext.currentTime, offset);
-  state.activeVoices.set(pointerId, {
+
+  return {
+    id: options.id ?? null,
+    isHeld: Boolean(options.isHeld),
     sample,
     source,
     gain,
     pointerPosition,
-  });
+  };
+}
 
+function storeTransientVoice(pointerId, pointerPosition) {
+  const voice = createVoice(pointerPosition, { isHeld: false });
+  if (!voice) {
+    return;
+  }
+  state.transientVoices.set(pointerId, voice);
   updateVoiceReadout();
   drawPad();
 }
 
-function updateVoicePitch(pointerId, pointerPosition) {
-  const voice = state.activeVoices.get(pointerId);
+function createHoldVoice(pointerPosition) {
+  const holdId = state.nextHoldId;
+  state.nextHoldId += 1;
+  const voice = createVoice(pointerPosition, { id: holdId, isHeld: true });
+  if (!voice) {
+    return null;
+  }
+  state.holdVoices.set(holdId, voice);
+  updateVoiceReadout();
+  drawPad();
+  return holdId;
+}
+
+function updateVoicePitch(voice, pointerPosition) {
   if (!voice || !state.audioContext) {
     return;
   }
@@ -236,6 +276,17 @@ function updateVoicePitch(pointerId, pointerPosition) {
   );
   updateVoiceReadout();
   drawPad();
+}
+
+function findHoldVoiceAtPosition(pointerPosition) {
+  for (const [holdId, voice] of state.holdVoices.entries()) {
+    const dx = voice.pointerPosition.x - pointerPosition.x;
+    const dy = voice.pointerPosition.y - pointerPosition.y;
+    if (Math.hypot(dx, dy) <= 20) {
+      return holdId;
+    }
+  }
+  return null;
 }
 
 function drawPad() {
@@ -273,7 +324,22 @@ function drawPad() {
   }
   ctx.stroke();
 
-  for (const voice of state.activeVoices.values()) {
+  for (const voice of state.holdVoices.values()) {
+    const { x, y } = voice.pointerPosition;
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x - 6, y);
+    ctx.lineTo(x + 6, y);
+    ctx.moveTo(x, y - 6);
+    ctx.lineTo(x, y + 6);
+    ctx.stroke();
+  }
+
+  for (const voice of state.transientVoices.values()) {
     const { x, y } = voice.pointerPosition;
     ctx.fillStyle = "#000";
     ctx.beginPath();
@@ -328,28 +394,70 @@ canvas.addEventListener("pointerdown", async (event) => {
 
   const position = getPointerPosition(event);
   canvas.setPointerCapture(event.pointerId);
-  createVoice(event.pointerId, position);
+
+  if (state.mode === "hold") {
+    const holdId = findHoldVoiceAtPosition(position) ?? createHoldVoice(position);
+    if (holdId !== null) {
+      state.holdDragByPointer.set(event.pointerId, holdId);
+      const voice = state.holdVoices.get(holdId);
+      if (voice) {
+        updateVoicePitch(voice, position);
+      }
+    }
+    return;
+  }
+
+  storeTransientVoice(event.pointerId, position);
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  if (!state.activeVoices.has(event.pointerId)) {
+  event.preventDefault();
+  const position = getPointerPosition(event);
+
+  if (state.mode === "hold") {
+    const holdId = state.holdDragByPointer.get(event.pointerId);
+    if (holdId === undefined) {
+      return;
+    }
+    const voice = state.holdVoices.get(holdId);
+    if (voice) {
+      updateVoicePitch(voice, position);
+    }
     return;
   }
-  event.preventDefault();
-  updateVoicePitch(event.pointerId, getPointerPosition(event));
+
+  const voice = state.transientVoices.get(event.pointerId);
+  if (!voice) {
+    return;
+  }
+  updateVoicePitch(voice, position);
 });
 
 canvas.addEventListener("pointerup", (event) => {
-  stopVoice(event.pointerId);
+  if (state.mode === "hold") {
+    state.holdDragByPointer.delete(event.pointerId);
+    return;
+  }
+  stopTransientVoice(event.pointerId);
 });
 
 canvas.addEventListener("pointercancel", (event) => {
-  stopVoice(event.pointerId);
+  if (state.mode === "hold") {
+    state.holdDragByPointer.delete(event.pointerId);
+    return;
+  }
+  stopTransientVoice(event.pointerId);
 });
 
 canvas.addEventListener("pointerleave", (event) => {
+  if (state.mode === "hold") {
+    if (event.buttons === 0) {
+      state.holdDragByPointer.delete(event.pointerId);
+    }
+    return;
+  }
   if (event.buttons === 0) {
-    stopVoice(event.pointerId);
+    stopTransientVoice(event.pointerId);
   }
 });
 
@@ -358,6 +466,12 @@ window.addEventListener("resize", resizeCanvas);
 toggleUiButton.addEventListener("click", () => {
   const isHidden = document.body.classList.toggle("ui-hidden");
   toggleUiButton.textContent = isHidden ? "Show controls and info" : "Hide controls and info";
+});
+
+modeButton.addEventListener("click", () => {
+  state.mode = state.mode === "free" ? "hold" : "free";
+  modeButton.textContent = state.mode === "free" ? "Mode: Free" : "Mode: Hold";
+  state.holdDragByPointer.clear();
 });
 
 updateOutputLabels();

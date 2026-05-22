@@ -21,6 +21,12 @@ body {
   font: inherit;
 }
 
+#modeButton {
+  display: block;
+  margin-top: 16px;
+  font: inherit;
+}
+
 #audioStatus {
   margin: 0 0 16px;
 }
