@@ -185,8 +185,8 @@ function stopVoiceCollection(collection, key) {
 
   const now = Tone.now();
   voice.gain.gain.cancelAndHoldAtTime(now);
-  voice.gain.gain.linearRampTo(0.0001, 0.08, now);
-  voice.source.stop(now + 0.09);
+  voice.gain.gain.linearRampTo(0.0001, 0.05, now);
+  voice.source.stop(now + 0.06);
   collection.delete(key);
   updateVoiceReadout();
   drawPad();
@@ -207,8 +207,8 @@ function stopSoloVoice() {
 
   const now = Tone.now();
   state.soloVoice.gain.gain.cancelAndHoldAtTime(now);
-  state.soloVoice.gain.gain.linearRampTo(0.0001, 0.08, now);
-  state.soloVoice.source.stop(now + 0.09);
+  state.soloVoice.gain.gain.linearRampTo(0.0001, 0.05, now);
+  state.soloVoice.source.stop(now + 0.06);
   state.soloVoice = null;
   updateVoiceReadout();
   drawPad();
@@ -241,7 +241,7 @@ function createVoice(pointerPosition, options = {}) {
     gain.dispose();
   };
 
-  gain.gain.linearRampTo(0.9, 0.02);
+  gain.gain.linearRampTo(0.9, 0.01);
   source.start(Tone.now(), offset);
 
   return {
@@ -295,7 +295,7 @@ function updateVoicePitch(voice, pointerPosition) {
   const grid = getGridPosition(pointerPosition);
   voice.pointerPosition = pointerPosition;
   voice.source.playbackRate.cancelAndHoldAtTime(Tone.now());
-  voice.source.playbackRate.linearRampTo(grid.pitchRatio, 0.03);
+  voice.source.playbackRate.linearRampTo(grid.pitchRatio, 0.015);
   updateVoiceReadout();
   drawPad();
 }
