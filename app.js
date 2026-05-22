@@ -402,24 +402,6 @@ function renderStaticPadBackground() {
   backgroundCtx.strokeStyle = "#000";
   backgroundCtx.strokeRect(0, playableHeight, width, height - playableHeight);
 
-  const controlRegions = getControlRegions(width, height);
-  backgroundCtx.font = '16px "Times New Roman", Times, serif';
-  backgroundCtx.textAlign = "center";
-  backgroundCtx.textBaseline = "middle";
-  for (const control of controlRegions) {
-    backgroundCtx.fillStyle = "#fff";
-    backgroundCtx.strokeStyle = "#000";
-    backgroundCtx.lineWidth = 1;
-    backgroundCtx.fillRect(control.x, control.y, control.width, control.height);
-    backgroundCtx.strokeRect(control.x, control.y, control.width, control.height);
-    backgroundCtx.fillStyle = "#000";
-    backgroundCtx.fillText(
-      control.label,
-      control.x + control.width / 2,
-      control.y + control.height / 2,
-    );
-  }
-
   state.padBackgroundCanvas = backgroundCanvas;
 }
 
@@ -468,6 +450,20 @@ function drawPad() {
 
   ctx.clearRect(0, 0, width, height);
   ctx.drawImage(state.padBackgroundCanvas, 0, 0, width, height);
+
+  const controlRegions = getControlRegions(width, height);
+  ctx.font = '16px "Times New Roman", Times, serif';
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const control of controlRegions) {
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1;
+    ctx.fillRect(control.x, control.y, control.width, control.height);
+    ctx.strokeRect(control.x, control.y, control.width, control.height);
+    ctx.fillStyle = "#000";
+    ctx.fillText(control.label, control.x + control.width / 2, control.y + control.height / 2);
+  }
 
   for (const voice of state.holdVoices.values()) {
     const { x, y } = voice.pointerPosition;
