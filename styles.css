@@ -117,33 +117,6 @@ h1 {
   touch-action: none;
 }
 
-.pad-overlay {
-  position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: 18px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px;
-  background-color: rgb(255 255 255 / 0.6);
-  color: rgb(0 0 0 / 0.6);
-  border: 1px solid rgb(0 0 0 / 0.6);
-  pointer-events: none;
-  backdrop-filter: blur(2px);
-}
-
-.pad-overlay strong,
-.pad-overlay span,
-#voiceReadout {
-  display: block;
-}
-
-.pad-overlay span {
-  margin-top: 4px;
-  font-size: 1rem;
-}
-
 .bank-panel {
   padding: 0;
 }
@@ -194,7 +167,4 @@ body.ui-hidden .hero {
     grid-template-columns: 1fr;
   }
 
-  .pad-overlay {
-    flex-direction: column;
-  }
 }

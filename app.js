@@ -3,7 +3,6 @@ const touchPad = document.getElementById("touchPad");
 const audioStatus = document.getElementById("audioStatus");
 const bankSummary = document.getElementById("bankSummary");
 const sampleList = document.getElementById("sampleList");
-const voiceReadout = document.getElementById("voiceReadout");
 const toggleUiButton = document.getElementById("toggleUiButton");
 
 const controls = {
@@ -204,26 +203,8 @@ function renderSampleBank() {
   }
 }
 
-function getAllVoices() {
-  return [
-    ...(state.soloVoice ? [state.soloVoice] : []),
-    ...state.holdVoices.values(),
-    ...state.transientVoices.values(),
-  ];
-}
-
 function updateVoiceReadout() {
-  const voices = getAllVoices();
-  if (!voices.length) {
-    voiceReadout.textContent = "No active voices";
-    return;
-  }
-
-  const labels = voices.map((voice) => {
-    const prefix = voice.isHeld ? "H" : "F";
-    return `${prefix}:${voice.sample.name} @ ${voice.source.playbackRate.value.toFixed(2)}x`;
-  });
-  voiceReadout.textContent = labels.join(" | ");
+  // Readout removed; keep the call sites stable.
 }
 
 function stopVoiceCollection(collection, key) {
