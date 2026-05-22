@@ -46,6 +46,7 @@ const state = {
   liveDelayMixAmount: 0.0,
   liveDistortionAmount: 0.12,
   liveSequencePattern: Array(16).fill(true),
+  liveSequenceRateMultiplier: 1,
   nextHoldId: 1,
   mode: "free",
 };
@@ -54,6 +55,8 @@ const canvas = touchPad;
 const ctx = canvas.getContext("2d");
 const TOP_CONTROL_LANE_HEIGHT = 112;
 const BOTTOM_CONTROL_LANE_HEIGHT = 72;
+const BASE_SEQUENCE_INTERVAL = "16n";
+const SEQUENCE_RATE_OPTIONS = [1, 2, 3, 4];
 
 function getNextHoldId() {
   const holdId = state.nextHoldId;
@@ -139,11 +142,15 @@ function getTopControlRegions(width) {
   if (state.topEffectView === "sequencer") {
     const headerHeight = 24;
     const stepGap = 4;
-    const stepsTop = controlY + headerHeight + 6;
-    const stepAreaHeight = Math.max(32, controlHeight - headerHeight - 6);
+    const rateGap = 6;
+    const rateY = controlY + headerHeight + 6;
+    const rateHeight = 24;
+    const stepsTop = rateY + rateHeight + 6;
+    const stepAreaHeight = Math.max(24, controlHeight - headerHeight - rateHeight - 12);
     const rowGap = 6;
     const stepHeight = (stepAreaHeight - rowGap) / 2;
     const stepWidth = (Math.max(0, width - inset * 2 - stepGap * 7) / 8);
+    const rateButtonWidth = (Math.max(0, width - inset * 2 - 64 - gap - rateGap * 3) / 4);
     const controls = [
       {
         action: "sequencer-back",
@@ -154,6 +161,18 @@ function getTopControlRegions(width) {
         height: headerHeight,
       },
     ];
+
+    for (const [index, multiplier] of SEQUENCE_RATE_OPTIONS.entries()) {
+      controls.push({
+        action: "sequencer-rate",
+        multiplier,
+        label: `${multiplier}x`,
+        x: inset + 64 + gap + index * (rateButtonWidth + rateGap),
+        y: rateY,
+        width: rateButtonWidth,
+        height: rateHeight,
+      });
+    }
 
     for (let index = 0; index < 16; index += 1) {
       const row = Math.floor(index / 8);
@@ -339,6 +358,16 @@ function getDisplayedSequenceOnCount() {
   return getDisplayedSequencePattern().filter(Boolean).length;
 }
 
+function getDisplayedSequenceRateMultiplier() {
+  if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
+    const voice = state.holdVoices.get(state.selectedHoldId);
+    if (voice?.sequenceRateMultiplier) {
+      return voice.sequenceRateMultiplier;
+    }
+  }
+  return state.liveSequenceRateMultiplier;
+}
+
 function getDisplayedDelayTimeAmount() {
   if (state.interactionMode === "edit" && state.selectedHoldId !== null) {
     const voice = state.holdVoices.get(state.selectedHoldId);
@@ -487,10 +516,18 @@ function applyVoiceSequencerStep(voice, time = Tone.now()) {
   if (!voice?.sequenceGateGain?.gain || !voice.sequencePattern?.length) {
     return;
   }
-  const stepTicks = Tone.Time("16n").toTicks();
+  const stepTicks = Tone.Time(BASE_SEQUENCE_INTERVAL).toTicks() / (voice.sequenceRateMultiplier ?? 1);
   const stepIndex = Math.floor(Tone.Transport.getTicksAtTime(time) / stepTicks) % voice.sequencePattern.length;
   const isOn = voice.sequencePattern[stepIndex] !== false;
   voice.sequenceGateGain.gain.setValueAtTime(isOn ? 1 : 0, time);
+}
+
+function updateVoiceSequenceLoopRate(voice) {
+  if (!voice?.sequenceLoop) {
+    return;
+  }
+  const stepTicks = Tone.Time(BASE_SEQUENCE_INTERVAL).toTicks() / (voice.sequenceRateMultiplier ?? 1);
+  voice.sequenceLoop.interval = `${stepTicks}i`;
 }
 
 function getEditableHoldVoice() {
@@ -676,6 +713,31 @@ function setSequenceStepEnabled(stepIndex, isEnabled) {
   schedulePadDraw();
 }
 
+function setSequenceRateMultiplierForTargets(multiplier) {
+  const nextMultiplier = SEQUENCE_RATE_OPTIONS.includes(multiplier) ? multiplier : 1;
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    if (!selectedVoice) {
+      return;
+    }
+    selectedVoice.sequenceRateMultiplier = nextMultiplier;
+    updateVoiceSequenceLoopRate(selectedVoice);
+    applyVoiceSequencerStep(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveSequenceRateMultiplier = nextMultiplier;
+  for (const voice of targets) {
+    voice.sequenceRateMultiplier = nextMultiplier;
+    updateVoiceSequenceLoopRate(voice);
+    applyVoiceSequencerStep(voice);
+  }
+  schedulePadDraw();
+}
+
 function stopVoiceCollection(collection, key) {
   const voice = collection.get(key);
   if (!voice) {
@@ -794,7 +856,7 @@ function createVoice(pointerPosition, options = {}) {
       return;
     }
     applyVoiceSequencerStep(voice, time);
-  }, "16n");
+  }, BASE_SEQUENCE_INTERVAL);
   source.onended = () => {
     modOsc.dispose();
     modGain.dispose();
@@ -830,10 +892,12 @@ function createVoice(pointerPosition, options = {}) {
     delayMixAmount: state.liveDelayMixAmount,
     distortionAmount: state.liveDistortionAmount,
     sequencePattern,
+    sequenceRateMultiplier: state.liveSequenceRateMultiplier,
   };
   applyVoiceMetal(voice);
   applyVoiceDelay(voice);
   applyVoiceDistortion(voice);
+  updateVoiceSequenceLoopRate(voice);
   applyVoiceSequencerStep(voice);
   sequenceLoop.start(0);
 
@@ -1083,6 +1147,8 @@ async function handlePadDown(pointerId, position, options = {}) {
     } else if (controlAction.action === "sequencer-back") {
       state.topEffectView = "main";
       schedulePadDraw();
+    } else if (controlAction.action === "sequencer-rate") {
+      setSequenceRateMultiplierForTargets(controlAction.multiplier);
     } else if (controlAction.action === "sequencer-step") {
       const currentPattern = getDisplayedSequencePattern();
       setSequenceStepEnabled(controlAction.stepIndex, !currentPattern[controlAction.stepIndex]);
@@ -1363,9 +1429,14 @@ function drawPad() {
   for (const control of [...topControlRegions, ...bottomControlRegions]) {
     const isActiveEdit = control.action === "edit-held" && state.interactionMode === "edit";
     const isSequenceStep = control.action === "sequencer-step";
+    const isSequenceRate = control.action === "sequencer-rate";
     const sequencePattern = isSequenceStep ? getDisplayedSequencePattern() : null;
     const isStepOn = isSequenceStep ? sequencePattern[control.stepIndex] !== false : false;
-    ctx.fillStyle = isSequenceStep ? (isStepOn ? "#000" : "#fff") : (isActiveEdit ? "#ddd" : "#fff");
+    const isActiveSequenceRate = isSequenceRate
+      && control.multiplier === getDisplayedSequenceRateMultiplier();
+    ctx.fillStyle = isSequenceStep
+      ? (isStepOn ? "#000" : "#fff")
+      : ((isActiveEdit || isActiveSequenceRate) ? "#ddd" : "#fff");
     ctx.strokeStyle = "#000";
     ctx.lineWidth = 1;
     ctx.fillRect(control.x, control.y, control.width, control.height);
