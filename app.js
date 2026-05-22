@@ -32,6 +32,7 @@ const state = {
   transientVoices: new Map(),
   holdVoices: new Map(),
   holdDragByPointer: new Map(),
+  holdGestureByPointer: new Map(),
   lastHoldTap: null,
   nextHoldId: 1,
   mode: "free",
@@ -294,6 +295,10 @@ function findHoldVoiceAtPosition(pointerPosition) {
   return null;
 }
 
+function getPointerDistance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
 function drawPad() {
   const bounds = canvas.getBoundingClientRect();
   const { rows, cols } = getGridConfig();
@@ -403,21 +408,13 @@ canvas.addEventListener("pointerdown", async (event) => {
   if (state.mode === "hold") {
     const existingHoldId = findHoldVoiceAtPosition(position);
     if (existingHoldId !== null) {
-      const now = performance.now();
-      const isDoubleTap = state.lastHoldTap
-        && state.lastHoldTap.holdId === existingHoldId
-        && now - state.lastHoldTap.time < 300;
-
-      state.lastHoldTap = { holdId: existingHoldId, time: now };
-
-      if (isDoubleTap) {
-        stopHoldVoice(existingHoldId);
-        state.holdDragByPointer.delete(event.pointerId);
-        state.lastHoldTap = null;
-        return;
-      }
-
       state.holdDragByPointer.set(event.pointerId, existingHoldId);
+      state.holdGestureByPointer.set(event.pointerId, {
+        holdId: existingHoldId,
+        startPosition: position,
+        lastPosition: position,
+        moved: false,
+      });
       const voice = state.holdVoices.get(existingHoldId);
       if (voice) {
         updateVoicePitch(voice, position);
@@ -426,6 +423,7 @@ canvas.addEventListener("pointerdown", async (event) => {
     }
 
     state.lastHoldTap = null;
+    state.holdGestureByPointer.delete(event.pointerId);
     const holdId = createHoldVoice(position);
     if (holdId !== null) {
       state.holdDragByPointer.set(event.pointerId, holdId);
@@ -445,6 +443,13 @@ canvas.addEventListener("pointermove", (event) => {
   const position = getPointerPosition(event);
 
   if (state.mode === "hold") {
+    const gesture = state.holdGestureByPointer.get(event.pointerId);
+    if (gesture) {
+      gesture.lastPosition = position;
+      if (!gesture.moved && getPointerDistance(gesture.startPosition, position) > 12) {
+        gesture.moved = true;
+      }
+    }
     const holdId = state.holdDragByPointer.get(event.pointerId);
     if (holdId === undefined) {
       return;
@@ -465,7 +470,30 @@ canvas.addEventListener("pointermove", (event) => {
 
 canvas.addEventListener("pointerup", (event) => {
   if (state.mode === "hold") {
+    const gesture = state.holdGestureByPointer.get(event.pointerId);
     state.holdDragByPointer.delete(event.pointerId);
+    state.holdGestureByPointer.delete(event.pointerId);
+
+    if (!gesture || gesture.moved) {
+      return;
+    }
+
+    const now = performance.now();
+    const isDoubleTap = state.lastHoldTap
+      && state.lastHoldTap.holdId === gesture.holdId
+      && now - state.lastHoldTap.time < 300;
+
+    if (isDoubleTap) {
+      stopHoldVoice(gesture.holdId);
+      state.lastHoldTap = null;
+      return;
+    }
+
+    state.lastHoldTap = {
+      holdId: gesture.holdId,
+      time: now,
+      position: gesture.lastPosition,
+    };
     return;
   }
   stopTransientVoice(event.pointerId);
@@ -474,6 +502,7 @@ canvas.addEventListener("pointerup", (event) => {
 canvas.addEventListener("pointercancel", (event) => {
   if (state.mode === "hold") {
     state.holdDragByPointer.delete(event.pointerId);
+    state.holdGestureByPointer.delete(event.pointerId);
     return;
   }
   stopTransientVoice(event.pointerId);
@@ -483,6 +512,7 @@ canvas.addEventListener("pointerleave", (event) => {
   if (state.mode === "hold") {
     if (event.buttons === 0) {
       state.holdDragByPointer.delete(event.pointerId);
+      state.holdGestureByPointer.delete(event.pointerId);
     }
     return;
   }
@@ -502,6 +532,7 @@ modeButton.addEventListener("click", () => {
   state.mode = state.mode === "free" ? "hold" : "free";
   modeButton.textContent = state.mode === "free" ? "Mode: Free" : "Mode: Hold";
   state.holdDragByPointer.clear();
+  state.holdGestureByPointer.clear();
 });
 
 updateOutputLabels();
