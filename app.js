@@ -80,6 +80,8 @@ function createSequencePattern({ unlocked = false, length = SEQUENCE_MAX_STEPS }
 function createDefaultSequencerState() {
   return {
     activePatternIndex: 0,
+    playbackPatternIndex: 0,
+    playbackStepIndex: 0,
     rateMultiplier: 1,
     patterns: Array.from({ length: SEQUENCE_PATTERN_COUNT }, (_, index) => (
       createSequencePattern({ unlocked: index === 0 })
@@ -172,6 +174,12 @@ function getPlayableTop() {
 function cloneSequencerState(sequencer = createDefaultSequencerState()) {
   return {
     activePatternIndex: clamp(sequencer.activePatternIndex ?? 0, 0, SEQUENCE_PATTERN_COUNT - 1),
+    playbackPatternIndex: clamp(
+      sequencer.playbackPatternIndex ?? sequencer.activePatternIndex ?? 0,
+      0,
+      SEQUENCE_PATTERN_COUNT - 1,
+    ),
+    playbackStepIndex: Math.max(0, sequencer.playbackStepIndex ?? 0),
     rateMultiplier: SEQUENCE_RATE_OPTIONS.includes(sequencer.rateMultiplier)
       ? sequencer.rateMultiplier
       : 1,
@@ -205,6 +213,34 @@ function getDisplayedSequencerState() {
 
 function getActiveSequencePattern(sequencer) {
   return sequencer?.patterns?.[sequencer.activePatternIndex] ?? null;
+}
+
+function getPlaybackSequencePattern(sequencer) {
+  return sequencer?.patterns?.[sequencer.playbackPatternIndex] ?? null;
+}
+
+function getUnlockedSequencePatternIndexes(sequencer) {
+  return sequencer?.patterns
+    ?.map((pattern, index) => (pattern.unlocked ? index : null))
+    .filter((index) => index !== null) ?? [0];
+}
+
+function resetSequencerPlayback(sequencer, patternIndex = sequencer?.activePatternIndex ?? 0) {
+  if (!sequencer) {
+    return;
+  }
+  sequencer.playbackPatternIndex = clamp(patternIndex, 0, SEQUENCE_PATTERN_COUNT - 1);
+  sequencer.playbackStepIndex = 0;
+}
+
+function advanceSequencerPlayback(sequencer) {
+  const unlockedIndexes = getUnlockedSequencePatternIndexes(sequencer);
+  const currentListIndex = unlockedIndexes.indexOf(sequencer.playbackPatternIndex);
+  const nextListIndex = currentListIndex >= 0
+    ? (currentListIndex + 1) % unlockedIndexes.length
+    : 0;
+  sequencer.playbackPatternIndex = unlockedIndexes[nextListIndex];
+  sequencer.playbackStepIndex = 0;
 }
 
 function isPointerInPlayableArea({ y, height }) {
@@ -811,14 +847,17 @@ function applyGlobalDistortion() {
 
 function applyVoiceSequencerStep(voice, time = Tone.now()) {
   const sequencer = getSequencerStateForVoice(voice);
-  const pattern = getActiveSequencePattern(sequencer);
+  const pattern = getPlaybackSequencePattern(sequencer);
   if (!voice?.sequenceGateGain?.gain || !pattern?.steps?.length) {
     return;
   }
-  const stepTicks = Tone.Time(BASE_SEQUENCE_INTERVAL).toTicks() / (sequencer.rateMultiplier ?? 1);
-  const stepIndex = Math.floor(Tone.Transport.getTicksAtTime(time) / stepTicks) % pattern.length;
+  const stepIndex = sequencer.playbackStepIndex % pattern.length;
   const isOn = pattern.steps[stepIndex] !== false;
   voice.sequenceGateGain.gain.setValueAtTime(isOn ? 1 : 0, time);
+  sequencer.playbackStepIndex += 1;
+  if (sequencer.playbackStepIndex >= pattern.length) {
+    advanceSequencerPlayback(sequencer);
+  }
 }
 
 function updateVoiceSequenceLoopRate(voice) {
@@ -1069,6 +1108,7 @@ function setSequenceRateMultiplierForTargets(multiplier) {
       return;
     }
     sequencer.rateMultiplier = nextMultiplier;
+    resetSequencerPlayback(sequencer, sequencer.playbackPatternIndex);
     updateVoiceSequenceLoopRate(selectedVoice);
     applyVoiceSequencerStep(selectedVoice);
     schedulePadDraw();
@@ -1076,12 +1116,14 @@ function setSequenceRateMultiplierForTargets(multiplier) {
   }
 
   state.liveSequencer.rateMultiplier = nextMultiplier;
+  resetSequencerPlayback(state.liveSequencer, state.liveSequencer.playbackPatternIndex);
   for (const voice of targets) {
     const sequencer = getSequencerStateForVoice(voice);
     if (!sequencer) {
       continue;
     }
     sequencer.rateMultiplier = nextMultiplier;
+    resetSequencerPlayback(sequencer, sequencer.playbackPatternIndex);
     updateVoiceSequenceLoopRate(voice);
     applyVoiceSequencerStep(voice);
   }
@@ -1100,6 +1142,7 @@ function setSequencePatternForTargets(patternIndex) {
     }
     sequencer.activePatternIndex = nextPatternIndex;
     sequencer.patterns[nextPatternIndex].unlocked = true;
+    resetSequencerPlayback(sequencer, nextPatternIndex);
     applyVoiceSequencerStep(selectedVoice);
     schedulePadDraw();
     return;
@@ -1107,6 +1150,7 @@ function setSequencePatternForTargets(patternIndex) {
 
   state.liveSequencer.activePatternIndex = nextPatternIndex;
   state.liveSequencer.patterns[nextPatternIndex].unlocked = true;
+  resetSequencerPlayback(state.liveSequencer, nextPatternIndex);
   for (const voice of targets) {
     const sequencer = getSequencerStateForVoice(voice);
     if (!sequencer) {
@@ -1114,6 +1158,7 @@ function setSequencePatternForTargets(patternIndex) {
     }
     sequencer.activePatternIndex = nextPatternIndex;
     sequencer.patterns[nextPatternIndex].unlocked = true;
+    resetSequencerPlayback(sequencer, nextPatternIndex);
     applyVoiceSequencerStep(voice);
   }
   schedulePadDraw();
@@ -1124,11 +1169,13 @@ function adjustSequenceLengthForTargets(delta) {
 
   if (state.interactionMode === "edit") {
     const selectedVoice = getEditableHoldVoice();
-    const pattern = getActiveSequencePattern(getSequencerStateForVoice(selectedVoice));
-    if (!pattern) {
+    const sequencer = getSequencerStateForVoice(selectedVoice);
+    const pattern = getActiveSequencePattern(sequencer);
+    if (!pattern || !sequencer) {
       return;
     }
     pattern.length = clamp(pattern.length + delta, 1, SEQUENCE_MAX_STEPS);
+    resetSequencerPlayback(sequencer, sequencer.playbackPatternIndex);
     applyVoiceSequencerStep(selectedVoice);
     schedulePadDraw();
     return;
@@ -1139,10 +1186,13 @@ function adjustSequenceLengthForTargets(delta) {
     return;
   }
   livePattern.length = clamp(livePattern.length + delta, 1, SEQUENCE_MAX_STEPS);
+  resetSequencerPlayback(state.liveSequencer, state.liveSequencer.playbackPatternIndex);
   for (const voice of targets) {
-    if (!getActiveSequencePattern(getSequencerStateForVoice(voice))) {
+    const sequencer = getSequencerStateForVoice(voice);
+    if (!getActiveSequencePattern(sequencer) || !sequencer) {
       continue;
     }
+    resetSequencerPlayback(sequencer, sequencer.playbackPatternIndex);
     applyVoiceSequencerStep(voice);
   }
   schedulePadDraw();
