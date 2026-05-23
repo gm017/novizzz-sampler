@@ -55,8 +55,7 @@ const state = {
   globalDelayFeedbackAmount: 0.18,
   globalDelayMixAmount: 0.0,
   globalDistortionAmount: 0.0,
-  liveSequencePattern: Array(16).fill(true),
-  liveSequenceRateMultiplier: 1,
+  liveSequencer: null,
   nextHoldId: 1,
   mode: "free",
 };
@@ -67,6 +66,28 @@ const TOP_CONTROL_LANE_HEIGHT = 112;
 const BOTTOM_CONTROL_LANE_HEIGHT = 72;
 const BASE_SEQUENCE_INTERVAL = "16n";
 const SEQUENCE_RATE_OPTIONS = [1, 2, 3, 4];
+const SEQUENCE_PATTERN_COUNT = 4;
+const SEQUENCE_MAX_STEPS = 16;
+
+function createSequencePattern({ unlocked = false, length = SEQUENCE_MAX_STEPS } = {}) {
+  return {
+    unlocked,
+    length,
+    steps: Array(SEQUENCE_MAX_STEPS).fill(true),
+  };
+}
+
+function createDefaultSequencerState() {
+  return {
+    activePatternIndex: 0,
+    rateMultiplier: 1,
+    patterns: Array.from({ length: SEQUENCE_PATTERN_COUNT }, (_, index) => (
+      createSequencePattern({ unlocked: index === 0 })
+    )),
+  };
+}
+
+state.liveSequencer = createDefaultSequencerState();
 
 function getNextHoldId() {
   const holdId = state.nextHoldId;
@@ -148,6 +169,44 @@ function getPlayableTop() {
   return TOP_CONTROL_LANE_HEIGHT;
 }
 
+function cloneSequencerState(sequencer = createDefaultSequencerState()) {
+  return {
+    activePatternIndex: clamp(sequencer.activePatternIndex ?? 0, 0, SEQUENCE_PATTERN_COUNT - 1),
+    rateMultiplier: SEQUENCE_RATE_OPTIONS.includes(sequencer.rateMultiplier)
+      ? sequencer.rateMultiplier
+      : 1,
+    patterns: Array.from({ length: SEQUENCE_PATTERN_COUNT }, (_, index) => {
+      const pattern = sequencer.patterns?.[index];
+      return {
+        unlocked: pattern?.unlocked ?? index === 0,
+        length: clamp(pattern?.length ?? SEQUENCE_MAX_STEPS, 1, SEQUENCE_MAX_STEPS),
+        steps: Array.from({ length: SEQUENCE_MAX_STEPS }, (_, stepIndex) => (
+          pattern?.steps?.[stepIndex] !== false
+        )),
+      };
+    }),
+  };
+}
+
+function getSequencerStateForVoice(voice) {
+  return voice?.sequencer ?? null;
+}
+
+function getDisplayedSequencerState() {
+  if (state.interactionMode === "edit") {
+    const voice = getEditableHoldVoice();
+    const sequencer = getSequencerStateForVoice(voice);
+    if (sequencer) {
+      return sequencer;
+    }
+  }
+  return state.liveSequencer;
+}
+
+function getActiveSequencePattern(sequencer) {
+  return sequencer?.patterns?.[sequencer.activePatternIndex] ?? null;
+}
+
 function isPointerInPlayableArea({ y, height }) {
   const playableTop = getPlayableTop();
   const playableBottom = playableTop + getPlayableHeight(height);
@@ -163,44 +222,91 @@ function getTopControlRegions(width) {
   const controlHeight = Math.max(28, laneHeight - 20);
 
   if (state.topEffectView === "sequencer") {
-    const headerHeight = 24;
+    const headerHeight = 20;
     const stepGap = 4;
-    const rateGap = 8;
-    const rateY = controlY + headerHeight + 6;
-    const rateHeight = 20;
-    const stepsTop = rateY + rateHeight + 6;
-    const stepAreaHeight = Math.max(24, controlHeight - headerHeight - rateHeight - 12);
+    const patternGap = 6;
+    const rateGap = 6;
+    const patternY = controlY + headerHeight + 4;
+    const patternHeight = 18;
+    const rateY = patternY + patternHeight + 4;
+    const rateHeight = 18;
+    const stepsTop = rateY + rateHeight + 4;
+    const stepAreaHeight = Math.max(24, controlHeight - headerHeight - patternHeight - rateHeight - 12);
     const rowGap = 6;
     const stepHeight = (stepAreaHeight - rowGap) / 2;
     const stepWidth = (Math.max(0, width - inset * 2 - stepGap * 7) / 8);
-    const rateButtonWidth = Math.max(
-      28,
-      (Math.max(0, width - inset * 2 - 64 - gap - rateGap * 5) / 4),
+    const backWidth = 52;
+    const lenButtonWidth = 22;
+    const lenLabelWidth = 42;
+    const patternButtonWidth = Math.max(
+      24,
+      (Math.max(0, width - inset * 2 - backWidth - gap - (lenButtonWidth * 2) - lenLabelWidth - (patternGap * 6)) / 4),
     );
+    const rateButtonWidth = Math.max(24, (Math.max(0, width - inset * 2 - rateGap * 3) / 4));
     const controls = [
       {
         action: "sequencer-back",
         label: "Back",
         x: inset,
         y: controlY,
-        width: 64,
+        width: backWidth,
         height: headerHeight,
       },
     ];
+
+    for (let index = 0; index < SEQUENCE_PATTERN_COUNT; index += 1) {
+      controls.push({
+        action: "sequencer-pattern",
+        patternIndex: index,
+        label: `P${index + 1}`,
+        x: inset + backWidth + gap + index * (patternButtonWidth + patternGap),
+        y: patternY,
+        width: patternButtonWidth,
+        height: patternHeight,
+      });
+    }
+
+    const lengthControlX = inset + backWidth + gap + SEQUENCE_PATTERN_COUNT * (patternButtonWidth + patternGap);
+    controls.push(
+      {
+        action: "sequencer-length-dec",
+        label: "-",
+        x: lengthControlX,
+        y: patternY,
+        width: lenButtonWidth,
+        height: patternHeight,
+      },
+      {
+        action: "sequencer-length-display",
+        label: `Len ${getDisplayedSequenceLength()}`,
+        x: lengthControlX + lenButtonWidth + patternGap,
+        y: patternY,
+        width: lenLabelWidth,
+        height: patternHeight,
+      },
+      {
+        action: "sequencer-length-inc",
+        label: "+",
+        x: lengthControlX + lenButtonWidth + patternGap + lenLabelWidth + patternGap,
+        y: patternY,
+        width: lenButtonWidth,
+        height: patternHeight,
+      },
+    );
 
     for (const [index, multiplier] of SEQUENCE_RATE_OPTIONS.entries()) {
       controls.push({
         action: "sequencer-rate",
         multiplier,
         label: `${multiplier}x`,
-        x: inset + 64 + gap + index * (rateButtonWidth + rateGap),
+        x: inset + index * (rateButtonWidth + rateGap),
         y: rateY,
         width: rateButtonWidth,
         height: rateHeight,
       });
     }
 
-    for (let index = 0; index < 16; index += 1) {
+    for (let index = 0; index < SEQUENCE_MAX_STEPS; index += 1) {
       const row = Math.floor(index / 8);
       const col = index % 8;
       controls.push({
@@ -364,7 +470,7 @@ function getTopControlRegions(width) {
     },
     {
       action: "sequencer",
-      label: `Seq ${getDisplayedSequenceOnCount()}/16`,
+      label: `Seq P${getDisplayedSequencePatternIndex() + 1} ${getDisplayedSequenceOnCount()}/${getDisplayedSequenceLength()}`,
       x: inset + (controlWidth + gap) * 3,
       y: controlY,
       width: controlWidth,
@@ -486,27 +592,31 @@ function getDisplayedDistortionAmount() {
 }
 
 function getDisplayedSequencePattern() {
-  if (state.interactionMode === "edit") {
-    const voice = getEditableHoldVoice();
-    if (voice?.sequencePattern) {
-      return voice.sequencePattern;
-    }
-  }
-  return state.liveSequencePattern;
+  return getActiveSequencePattern(getDisplayedSequencerState())?.steps ?? Array(SEQUENCE_MAX_STEPS).fill(true);
+}
+
+function getDisplayedSequenceLength() {
+  return getActiveSequencePattern(getDisplayedSequencerState())?.length ?? SEQUENCE_MAX_STEPS;
+}
+
+function getDisplayedSequencePatternIndex() {
+  return getDisplayedSequencerState()?.activePatternIndex ?? 0;
+}
+
+function isDisplayedSequencePatternUnlocked(patternIndex) {
+  return getDisplayedSequencerState()?.patterns?.[patternIndex]?.unlocked ?? false;
 }
 
 function getDisplayedSequenceOnCount() {
-  return getDisplayedSequencePattern().filter(Boolean).length;
+  const pattern = getActiveSequencePattern(getDisplayedSequencerState());
+  if (!pattern) {
+    return 0;
+  }
+  return pattern.steps.slice(0, pattern.length).filter(Boolean).length;
 }
 
 function getDisplayedSequenceRateMultiplier() {
-  if (state.interactionMode === "edit") {
-    const voice = getEditableHoldVoice();
-    if (voice?.sequenceRateMultiplier) {
-      return voice.sequenceRateMultiplier;
-    }
-  }
-  return state.liveSequenceRateMultiplier;
+  return getDisplayedSequencerState()?.rateMultiplier ?? 1;
 }
 
 function getDisplayedDelayTimeAmount() {
@@ -700,20 +810,23 @@ function applyGlobalDistortion() {
 }
 
 function applyVoiceSequencerStep(voice, time = Tone.now()) {
-  if (!voice?.sequenceGateGain?.gain || !voice.sequencePattern?.length) {
+  const sequencer = getSequencerStateForVoice(voice);
+  const pattern = getActiveSequencePattern(sequencer);
+  if (!voice?.sequenceGateGain?.gain || !pattern?.steps?.length) {
     return;
   }
-  const stepTicks = Tone.Time(BASE_SEQUENCE_INTERVAL).toTicks() / (voice.sequenceRateMultiplier ?? 1);
-  const stepIndex = Math.floor(Tone.Transport.getTicksAtTime(time) / stepTicks) % voice.sequencePattern.length;
-  const isOn = voice.sequencePattern[stepIndex] !== false;
+  const stepTicks = Tone.Time(BASE_SEQUENCE_INTERVAL).toTicks() / (sequencer.rateMultiplier ?? 1);
+  const stepIndex = Math.floor(Tone.Transport.getTicksAtTime(time) / stepTicks) % pattern.length;
+  const isOn = pattern.steps[stepIndex] !== false;
   voice.sequenceGateGain.gain.setValueAtTime(isOn ? 1 : 0, time);
 }
 
 function updateVoiceSequenceLoopRate(voice) {
-  if (!voice?.sequenceLoop) {
+  const sequencer = getSequencerStateForVoice(voice);
+  if (!voice?.sequenceLoop || !sequencer) {
     return;
   }
-  const stepTicks = Tone.Time(BASE_SEQUENCE_INTERVAL).toTicks() / (voice.sequenceRateMultiplier ?? 1);
+  const stepTicks = Tone.Time(BASE_SEQUENCE_INTERVAL).toTicks() / (sequencer.rateMultiplier ?? 1);
   voice.sequenceLoop.interval = `${stepTicks}i`;
 }
 
@@ -919,21 +1032,27 @@ function setSequenceStepEnabled(stepIndex, isEnabled) {
 
   if (state.interactionMode === "edit") {
     const selectedVoice = getEditableHoldVoice();
-    if (!selectedVoice?.sequencePattern) {
+    const selectedPattern = getActiveSequencePattern(getSequencerStateForVoice(selectedVoice));
+    if (!selectedPattern) {
       return;
     }
-    selectedVoice.sequencePattern[stepIndex] = isEnabled;
+    selectedPattern.steps[stepIndex] = isEnabled;
     applyVoiceSequencerStep(selectedVoice);
     schedulePadDraw();
     return;
   }
 
-  state.liveSequencePattern[stepIndex] = isEnabled;
+  const livePattern = getActiveSequencePattern(state.liveSequencer);
+  if (!livePattern) {
+    return;
+  }
+  livePattern.steps[stepIndex] = isEnabled;
   for (const voice of targets) {
-    if (!voice.sequencePattern) {
+    const pattern = getActiveSequencePattern(getSequencerStateForVoice(voice));
+    if (!pattern) {
       continue;
     }
-    voice.sequencePattern[stepIndex] = isEnabled;
+    pattern.steps[stepIndex] = isEnabled;
     applyVoiceSequencerStep(voice);
   }
   schedulePadDraw();
@@ -945,20 +1064,85 @@ function setSequenceRateMultiplierForTargets(multiplier) {
 
   if (state.interactionMode === "edit") {
     const selectedVoice = getEditableHoldVoice();
-    if (!selectedVoice) {
+    const sequencer = getSequencerStateForVoice(selectedVoice);
+    if (!sequencer) {
       return;
     }
-    selectedVoice.sequenceRateMultiplier = nextMultiplier;
+    sequencer.rateMultiplier = nextMultiplier;
     updateVoiceSequenceLoopRate(selectedVoice);
     applyVoiceSequencerStep(selectedVoice);
     schedulePadDraw();
     return;
   }
 
-  state.liveSequenceRateMultiplier = nextMultiplier;
+  state.liveSequencer.rateMultiplier = nextMultiplier;
   for (const voice of targets) {
-    voice.sequenceRateMultiplier = nextMultiplier;
+    const sequencer = getSequencerStateForVoice(voice);
+    if (!sequencer) {
+      continue;
+    }
+    sequencer.rateMultiplier = nextMultiplier;
     updateVoiceSequenceLoopRate(voice);
+    applyVoiceSequencerStep(voice);
+  }
+  schedulePadDraw();
+}
+
+function setSequencePatternForTargets(patternIndex) {
+  const nextPatternIndex = clamp(patternIndex, 0, SEQUENCE_PATTERN_COUNT - 1);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    const sequencer = getSequencerStateForVoice(selectedVoice);
+    if (!sequencer) {
+      return;
+    }
+    sequencer.activePatternIndex = nextPatternIndex;
+    sequencer.patterns[nextPatternIndex].unlocked = true;
+    applyVoiceSequencerStep(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  state.liveSequencer.activePatternIndex = nextPatternIndex;
+  state.liveSequencer.patterns[nextPatternIndex].unlocked = true;
+  for (const voice of targets) {
+    const sequencer = getSequencerStateForVoice(voice);
+    if (!sequencer) {
+      continue;
+    }
+    sequencer.activePatternIndex = nextPatternIndex;
+    sequencer.patterns[nextPatternIndex].unlocked = true;
+    applyVoiceSequencerStep(voice);
+  }
+  schedulePadDraw();
+}
+
+function adjustSequenceLengthForTargets(delta) {
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    const pattern = getActiveSequencePattern(getSequencerStateForVoice(selectedVoice));
+    if (!pattern) {
+      return;
+    }
+    pattern.length = clamp(pattern.length + delta, 1, SEQUENCE_MAX_STEPS);
+    applyVoiceSequencerStep(selectedVoice);
+    schedulePadDraw();
+    return;
+  }
+
+  const livePattern = getActiveSequencePattern(state.liveSequencer);
+  if (!livePattern) {
+    return;
+  }
+  livePattern.length = clamp(livePattern.length + delta, 1, SEQUENCE_MAX_STEPS);
+  for (const voice of targets) {
+    if (!getActiveSequencePattern(getSequencerStateForVoice(voice))) {
+      continue;
+    }
     applyVoiceSequencerStep(voice);
   }
   schedulePadDraw();
@@ -1083,7 +1267,7 @@ function createVoice(pointerPosition, options = {}) {
   delayNode.connect(sequenceGateGain);
   sequenceGateGain.connect(gain);
   gain.connect(state.masterInput);
-  const sequencePattern = [...state.liveSequencePattern];
+  const sequencer = cloneSequencerState(state.liveSequencer);
   const sequenceLoop = new Tone.Loop((time) => {
     if (source.state === "stopped") {
       return;
@@ -1124,8 +1308,7 @@ function createVoice(pointerPosition, options = {}) {
     delayFeedbackAmount: state.liveDelayFeedbackAmount,
     delayMixAmount: state.liveDelayMixAmount,
     distortionAmount: state.liveDistortionAmount,
-    sequencePattern,
-    sequenceRateMultiplier: state.liveSequenceRateMultiplier,
+    sequencer,
   };
   applyVoiceMetal(voice);
   applyVoiceDelay(voice);
@@ -1440,6 +1623,12 @@ async function handlePadDown(pointerId, position, options = {}) {
     } else if (controlAction.action === "sequencer-back") {
       state.topEffectView = "main";
       schedulePadDraw();
+    } else if (controlAction.action === "sequencer-pattern") {
+      setSequencePatternForTargets(controlAction.patternIndex);
+    } else if (controlAction.action === "sequencer-length-dec") {
+      adjustSequenceLengthForTargets(-1);
+    } else if (controlAction.action === "sequencer-length-inc") {
+      adjustSequenceLengthForTargets(1);
     } else if (controlAction.action === "sequencer-rate") {
       setSequenceRateMultiplierForTargets(controlAction.multiplier);
     } else if (controlAction.action === "sequencer-step") {
@@ -1734,13 +1923,25 @@ function drawPad() {
     const isActiveEdit = control.action === "edit-held" && state.interactionMode === "edit";
     const isSequenceStep = control.action === "sequencer-step";
     const isSequenceRate = control.action === "sequencer-rate";
+    const isSequencePattern = control.action === "sequencer-pattern";
+    const isSequenceLengthDisplay = control.action === "sequencer-length-display";
     const sequencePattern = isSequenceStep ? getDisplayedSequencePattern() : null;
+    const sequenceLength = isSequenceStep ? getDisplayedSequenceLength() : 0;
     const isStepOn = isSequenceStep ? sequencePattern[control.stepIndex] !== false : false;
+    const isStepInRange = isSequenceStep ? control.stepIndex < sequenceLength : false;
     const isActiveSequenceRate = isSequenceRate
       && control.multiplier === getDisplayedSequenceRateMultiplier();
+    const isActiveSequencePattern = isSequencePattern
+      && control.patternIndex === getDisplayedSequencePatternIndex();
+    const isUnlockedSequencePattern = isSequencePattern
+      && isDisplayedSequencePatternUnlocked(control.patternIndex);
     ctx.fillStyle = isSequenceStep
-      ? (isStepOn ? "#000" : "#fff")
-      : ((isActiveEdit || isActiveSequenceRate) ? "#ddd" : "#fff");
+      ? (isStepInRange ? (isStepOn ? "#000" : "#fff") : "#dcdcdc")
+      : (
+        isSequencePattern
+          ? (isActiveSequencePattern ? "#ddd" : (isUnlockedSequencePattern ? "#fff" : "#f1f1f1"))
+          : ((isActiveEdit || isActiveSequenceRate || isSequenceLengthDisplay) ? "#ddd" : "#fff")
+      );
     ctx.strokeStyle = "#000";
     ctx.lineWidth = 1;
     ctx.fillRect(control.x, control.y, control.width, control.height);
@@ -1849,8 +2050,9 @@ function drawPad() {
       });
     }
 
-    ctx.fillStyle = isSequenceStep && isStepOn ? "#fff" : "#000";
-    ctx.fillText(control.label, control.x + control.width / 2, control.y + control.height / 2);
+    ctx.fillStyle = isSequenceStep && isStepInRange && isStepOn ? "#fff" : "#000";
+    const label = isSequencePattern && !isUnlockedSequencePattern ? `${control.label}+` : control.label;
+    ctx.fillText(label, control.x + control.width / 2, control.y + control.height / 2);
   }
 
   for (const voice of state.holdVoices.values()) {
