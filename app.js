@@ -82,6 +82,8 @@ function createDefaultSequencerState() {
     activePatternIndex: 0,
     playbackPatternIndex: 0,
     playbackStepIndex: 0,
+    lastPlayedPatternIndex: 0,
+    lastPlayedStepIndex: 0,
     rateMultiplier: 1,
     patterns: Array.from({ length: SEQUENCE_PATTERN_COUNT }, (_, index) => (
       createSequencePattern({ unlocked: index === 0 })
@@ -180,6 +182,12 @@ function cloneSequencerState(sequencer = createDefaultSequencerState()) {
       SEQUENCE_PATTERN_COUNT - 1,
     ),
     playbackStepIndex: Math.max(0, sequencer.playbackStepIndex ?? 0),
+    lastPlayedPatternIndex: clamp(
+      sequencer.lastPlayedPatternIndex ?? sequencer.playbackPatternIndex ?? 0,
+      0,
+      SEQUENCE_PATTERN_COUNT - 1,
+    ),
+    lastPlayedStepIndex: Math.max(0, sequencer.lastPlayedStepIndex ?? 0),
     rateMultiplier: SEQUENCE_RATE_OPTIONS.includes(sequencer.rateMultiplier)
       ? sequencer.rateMultiplier
       : 1,
@@ -211,6 +219,14 @@ function getDisplayedSequencerState() {
   return state.liveSequencer;
 }
 
+function getDisplayedPlaybackPatternIndex() {
+  return getDisplayedSequencerState()?.lastPlayedPatternIndex ?? 0;
+}
+
+function getDisplayedPlaybackStepIndex() {
+  return getDisplayedSequencerState()?.lastPlayedStepIndex ?? 0;
+}
+
 function getActiveSequencePattern(sequencer) {
   return sequencer?.patterns?.[sequencer.activePatternIndex] ?? null;
 }
@@ -231,6 +247,8 @@ function resetSequencerPlayback(sequencer, patternIndex = sequencer?.activePatte
   }
   sequencer.playbackPatternIndex = clamp(patternIndex, 0, SEQUENCE_PATTERN_COUNT - 1);
   sequencer.playbackStepIndex = 0;
+  sequencer.lastPlayedPatternIndex = sequencer.playbackPatternIndex;
+  sequencer.lastPlayedStepIndex = 0;
 }
 
 function advanceSequencerPlayback(sequencer) {
@@ -314,7 +332,7 @@ function getTopControlRegions(width) {
       },
       {
         action: "sequencer-length-display",
-        label: `Len ${getDisplayedSequenceLength()}`,
+        label: `${getDisplayedSequenceLength()}`,
         x: lengthControlX + lenButtonWidth + patternGap,
         y: patternY,
         width: lenLabelWidth,
@@ -853,7 +871,12 @@ function applyVoiceSequencerStep(voice, time = Tone.now()) {
   }
   const stepIndex = sequencer.playbackStepIndex % pattern.length;
   const isOn = pattern.steps[stepIndex] !== false;
+  sequencer.lastPlayedPatternIndex = sequencer.playbackPatternIndex;
+  sequencer.lastPlayedStepIndex = stepIndex;
   voice.sequenceGateGain.gain.setValueAtTime(isOn ? 1 : 0, time);
+  if (state.topEffectView === "sequencer") {
+    schedulePadDraw();
+  }
   sequencer.playbackStepIndex += 1;
   if (sequencer.playbackStepIndex >= pattern.length) {
     advanceSequencerPlayback(sequencer);
@@ -1979,6 +2002,9 @@ function drawPad() {
     const sequenceLength = isSequenceStep ? getDisplayedSequenceLength() : 0;
     const isStepOn = isSequenceStep ? sequencePattern[control.stepIndex] !== false : false;
     const isStepInRange = isSequenceStep ? control.stepIndex < sequenceLength : false;
+    const isPlayingSequenceStep = isSequenceStep
+      && getDisplayedSequencePatternIndex() === getDisplayedPlaybackPatternIndex()
+      && control.stepIndex === getDisplayedPlaybackStepIndex();
     const isActiveSequenceRate = isSequenceRate
       && control.multiplier === getDisplayedSequenceRateMultiplier();
     const isActiveSequencePattern = isSequencePattern
@@ -1986,7 +2012,11 @@ function drawPad() {
     const isUnlockedSequencePattern = isSequencePattern
       && isDisplayedSequencePatternUnlocked(control.patternIndex);
     ctx.fillStyle = isSequenceStep
-      ? (isStepInRange ? (isStepOn ? "#000" : "#fff") : "#dcdcdc")
+      ? (
+        isStepInRange
+          ? (isPlayingSequenceStep ? "#f4b3b3" : (isStepOn ? "#000" : "#fff"))
+          : "#dcdcdc"
+      )
       : (
         isSequencePattern
           ? (isActiveSequencePattern ? "#ddd" : (isUnlockedSequencePattern ? "#fff" : "#f1f1f1"))
@@ -2100,7 +2130,7 @@ function drawPad() {
       });
     }
 
-    ctx.fillStyle = isSequenceStep && isStepInRange && isStepOn ? "#fff" : "#000";
+    ctx.fillStyle = isSequenceStep && isStepInRange && isStepOn && !isPlayingSequenceStep ? "#fff" : "#000";
     const label = isSequencePattern && !isUnlockedSequencePattern ? `${control.label}+` : control.label;
     ctx.fillText(label, control.x + control.width / 2, control.y + control.height / 2);
   }
