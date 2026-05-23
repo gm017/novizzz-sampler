@@ -524,7 +524,7 @@ function getTopControlRegions(width) {
     },
     {
       action: "sequencer",
-      label: `Seq P${getDisplayedSequencePatternIndex() + 1} ${getDisplayedSequenceOnCount()}/${getDisplayedSequenceLength()}`,
+      label: "Seq",
       x: inset + (controlWidth + gap) * 3,
       y: controlY,
       width: controlWidth,
