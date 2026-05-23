@@ -71,7 +71,7 @@ const SEQUENCE_PATTERN_COUNT = 4;
 const SEQUENCE_MAX_STEPS = 16;
 const SEQUENCE_PITCH_RANGE = 12;
 const SEQUENCE_PITCH_HOLD_MS = 280;
-const SEQUENCE_PITCH_PIXELS_PER_SEMITONE = 12;
+const SEQUENCE_PITCH_PIXELS_PER_SEMITONE = 24;
 
 function createSequencePattern({ unlocked = false, length = SEQUENCE_MAX_STEPS } = {}) {
   return {
@@ -205,7 +205,7 @@ function cloneSequencerState(sequencer = createDefaultSequencerState()) {
           pattern?.steps?.[stepIndex] !== false
         )),
         pitchOffsets: Array.from({ length: SEQUENCE_MAX_STEPS }, (_, stepIndex) => (
-          clamp(Math.round(pattern?.pitchOffsets?.[stepIndex] ?? 0), -SEQUENCE_PITCH_RANGE, SEQUENCE_PITCH_RANGE)
+          clamp(Number(pattern?.pitchOffsets?.[stepIndex] ?? 0), -SEQUENCE_PITCH_RANGE, SEQUENCE_PITCH_RANGE)
         )),
       };
     }),
@@ -247,7 +247,8 @@ function formatSequencePitchOffset(semitones) {
   if (!semitones) {
     return "0";
   }
-  return semitones > 0 ? `+${semitones}` : `${semitones}`;
+  const rounded = Math.round(semitones * 10) / 10;
+  return rounded > 0 ? `+${rounded.toFixed(1)}` : `${rounded.toFixed(1)}`;
 }
 
 function getUnlockedSequencePatternIndexes(sequencer) {
@@ -1184,7 +1185,7 @@ function setSequenceStepEnabled(stepIndex, isEnabled) {
 }
 
 function setSequenceStepPitchOffset(stepIndex, semitoneOffset) {
-  const nextOffset = clamp(Math.round(semitoneOffset), -SEQUENCE_PITCH_RANGE, SEQUENCE_PITCH_RANGE);
+  const nextOffset = clamp(semitoneOffset, -SEQUENCE_PITCH_RANGE, SEQUENCE_PITCH_RANGE);
   const targets = getEffectTargetVoices();
 
   if (state.interactionMode === "edit") {
@@ -1689,9 +1690,7 @@ function clearSequenceStepPress(pointerId) {
 }
 
 function updateSequenceStepPitchFromPointer(interaction, position) {
-  const deltaSemitones = Math.round(
-    (interaction.startPosition.y - position.y) / SEQUENCE_PITCH_PIXELS_PER_SEMITONE,
-  );
+  const deltaSemitones = (interaction.startPosition.y - position.y) / SEQUENCE_PITCH_PIXELS_PER_SEMITONE;
   const nextOffset = clamp(
     interaction.initialPitchOffset + deltaSemitones,
     -SEQUENCE_PITCH_RANGE,
