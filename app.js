@@ -32,6 +32,7 @@ const state = {
   padBackgroundCanvas: null,
   drawScheduled: false,
   controlDragByPointer: new Map(),
+  sequenceStepPressByPointer: new Map(),
   samples: [],
   transientVoices: new Map(),
   holdVoices: new Map(),
@@ -62,18 +63,22 @@ const state = {
 
 const canvas = touchPad;
 const ctx = canvas.getContext("2d");
-const TOP_CONTROL_LANE_HEIGHT = 112;
+const TOP_CONTROL_LANE_HEIGHT = 136;
 const BOTTOM_CONTROL_LANE_HEIGHT = 72;
 const BASE_SEQUENCE_INTERVAL = "16n";
 const SEQUENCE_RATE_OPTIONS = [1, 2, 3, 4];
 const SEQUENCE_PATTERN_COUNT = 4;
 const SEQUENCE_MAX_STEPS = 16;
+const SEQUENCE_PITCH_RANGE = 12;
+const SEQUENCE_PITCH_HOLD_MS = 280;
+const SEQUENCE_PITCH_PIXELS_PER_SEMITONE = 12;
 
 function createSequencePattern({ unlocked = false, length = SEQUENCE_MAX_STEPS } = {}) {
   return {
     unlocked,
     length,
     steps: Array(SEQUENCE_MAX_STEPS).fill(true),
+    pitchOffsets: Array(SEQUENCE_MAX_STEPS).fill(0),
   };
 }
 
@@ -199,6 +204,9 @@ function cloneSequencerState(sequencer = createDefaultSequencerState()) {
         steps: Array.from({ length: SEQUENCE_MAX_STEPS }, (_, stepIndex) => (
           pattern?.steps?.[stepIndex] !== false
         )),
+        pitchOffsets: Array.from({ length: SEQUENCE_MAX_STEPS }, (_, stepIndex) => (
+          clamp(Math.round(pattern?.pitchOffsets?.[stepIndex] ?? 0), -SEQUENCE_PITCH_RANGE, SEQUENCE_PITCH_RANGE)
+        )),
       };
     }),
   };
@@ -233,6 +241,13 @@ function getActiveSequencePattern(sequencer) {
 
 function getPlaybackSequencePattern(sequencer) {
   return sequencer?.patterns?.[sequencer.playbackPatternIndex] ?? null;
+}
+
+function formatSequencePitchOffset(semitones) {
+  if (!semitones) {
+    return "0";
+  }
+  return semitones > 0 ? `+${semitones}` : `${semitones}`;
 }
 
 function getUnlockedSequencePatternIndexes(sequencer) {
@@ -653,6 +668,10 @@ function getDisplayedSequencePattern() {
   return getActiveSequencePattern(getDisplayedSequencerState())?.steps ?? Array(SEQUENCE_MAX_STEPS).fill(true);
 }
 
+function getDisplayedSequencePitchOffset(stepIndex) {
+  return getActiveSequencePattern(getDisplayedSequencerState())?.pitchOffsets?.[stepIndex] ?? 0;
+}
+
 function getDisplayedSequenceLength() {
   return getActiveSequencePattern(getDisplayedSequencerState())?.length ?? SEQUENCE_MAX_STEPS;
 }
@@ -867,6 +886,23 @@ function applyGlobalDistortion() {
   state.globalDistortion.wet.setValueAtTime(state.globalDistortionAmount * 0.9, now);
 }
 
+function getVoiceSequencePlaybackRate(voice, semitoneOffset = 0) {
+  return voice.basePlaybackRate * Math.pow(2, semitoneOffset / 12);
+}
+
+function getVoiceCurrentSequencePitchOffset(voice) {
+  const sequencer = getSequencerStateForVoice(voice);
+  const pattern = sequencer?.patterns?.[sequencer.lastPlayedPatternIndex];
+  return pattern?.pitchOffsets?.[sequencer.lastPlayedStepIndex] ?? 0;
+}
+
+function applyVoiceSequencePitch(voice, semitoneOffset = 0, time = Tone.now()) {
+  if (!voice?.source?.playbackRate) {
+    return;
+  }
+  voice.source.playbackRate.setValueAtTime(getVoiceSequencePlaybackRate(voice, semitoneOffset), time);
+}
+
 function applyVoiceSequencerStep(voice, time = Tone.now()) {
   const sequencer = getSequencerStateForVoice(voice);
   const pattern = getPlaybackSequencePattern(sequencer);
@@ -875,8 +911,10 @@ function applyVoiceSequencerStep(voice, time = Tone.now()) {
   }
   const stepIndex = sequencer.playbackStepIndex % pattern.length;
   const isOn = pattern.steps[stepIndex] !== false;
+  const pitchOffset = pattern.pitchOffsets?.[stepIndex] ?? 0;
   sequencer.lastPlayedPatternIndex = sequencer.playbackPatternIndex;
   sequencer.lastPlayedStepIndex = stepIndex;
+  applyVoiceSequencePitch(voice, pitchOffset, time);
   voice.sequenceGateGain.gain.setValueAtTime(isOn ? 1 : 0, time);
   if (state.topEffectView === "sequencer") {
     schedulePadDraw();
@@ -1141,6 +1179,38 @@ function setSequenceStepEnabled(stepIndex, isEnabled) {
     }
     pattern.steps[stepIndex] = isEnabled;
     applyVoiceSequencerStep(voice);
+  }
+  schedulePadDraw();
+}
+
+function setSequenceStepPitchOffset(stepIndex, semitoneOffset) {
+  const nextOffset = clamp(Math.round(semitoneOffset), -SEQUENCE_PITCH_RANGE, SEQUENCE_PITCH_RANGE);
+  const targets = getEffectTargetVoices();
+
+  if (state.interactionMode === "edit") {
+    const selectedVoice = getEditableHoldVoice();
+    const selectedPattern = getActiveSequencePattern(getSequencerStateForVoice(selectedVoice));
+    if (!selectedPattern) {
+      return;
+    }
+    selectedPattern.pitchOffsets[stepIndex] = nextOffset;
+    applyVoiceSequencePitch(selectedVoice, getVoiceCurrentSequencePitchOffset(selectedVoice));
+    schedulePadDraw();
+    return;
+  }
+
+  const livePattern = getActiveSequencePattern(state.liveSequencer);
+  if (!livePattern) {
+    return;
+  }
+  livePattern.pitchOffsets[stepIndex] = nextOffset;
+  for (const voice of targets) {
+    const pattern = getActiveSequencePattern(getSequencerStateForVoice(voice));
+    if (!pattern) {
+      continue;
+    }
+    pattern.pitchOffsets[stepIndex] = nextOffset;
+    applyVoiceSequencePitch(voice, getVoiceCurrentSequencePitchOffset(voice));
   }
   schedulePadDraw();
 }
@@ -1464,7 +1534,7 @@ function updateVoicePitch(voice, pointerPosition) {
   voice.pointerPosition = pointerPosition;
   voice.basePlaybackRate = grid.pitchRatio;
   voice.source.playbackRate.cancelAndHoldAtTime(Tone.now());
-  voice.source.playbackRate.setValueAtTime(grid.pitchRatio, Tone.now());
+  applyVoiceSequencePitch(voice, getVoiceCurrentSequencePitchOffset(voice));
   applyVoiceMetal(voice);
   schedulePadDraw();
 }
@@ -1606,6 +1676,33 @@ function getLastSoloPointerId(excludePointerId = null) {
   return nextPointerId;
 }
 
+function clearSequenceStepPress(pointerId) {
+  const interaction = state.sequenceStepPressByPointer.get(pointerId);
+  if (!interaction) {
+    return null;
+  }
+  if (interaction.timeoutId !== null) {
+    window.clearTimeout(interaction.timeoutId);
+  }
+  state.sequenceStepPressByPointer.delete(pointerId);
+  return interaction;
+}
+
+function updateSequenceStepPitchFromPointer(interaction, position) {
+  const deltaSemitones = Math.round(
+    (interaction.startPosition.y - position.y) / SEQUENCE_PITCH_PIXELS_PER_SEMITONE,
+  );
+  const nextOffset = clamp(
+    interaction.initialPitchOffset + deltaSemitones,
+    -SEQUENCE_PITCH_RANGE,
+    SEQUENCE_PITCH_RANGE,
+  );
+  if (nextOffset !== interaction.currentPitchOffset) {
+    interaction.currentPitchOffset = nextOffset;
+    setSequenceStepPitchOffset(interaction.stepIndex, nextOffset);
+  }
+}
+
 async function handlePadDown(pointerId, position, options = {}) {
   const { capturePointer = false } = options;
   const controlAction = getControlActionAtPosition(position);
@@ -1729,8 +1826,22 @@ async function handlePadDown(pointerId, position, options = {}) {
     } else if (controlAction.action === "sequencer-rate") {
       setSequenceRateMultiplierForTargets(controlAction.multiplier);
     } else if (controlAction.action === "sequencer-step") {
-      const currentPattern = getDisplayedSequencePattern();
-      setSequenceStepEnabled(controlAction.stepIndex, !currentPattern[controlAction.stepIndex]);
+      state.sequenceStepPressByPointer.set(pointerId, {
+        stepIndex: controlAction.stepIndex,
+        startPosition: position,
+        editingPitch: false,
+        timeoutId: window.setTimeout(() => {
+          const interaction = state.sequenceStepPressByPointer.get(pointerId);
+          if (!interaction) {
+            return;
+          }
+          interaction.editingPitch = true;
+          interaction.timeoutId = null;
+          schedulePadDraw();
+        }, SEQUENCE_PITCH_HOLD_MS),
+        initialPitchOffset: getDisplayedSequencePitchOffset(controlAction.stepIndex),
+        currentPitchOffset: getDisplayedSequencePitchOffset(controlAction.stepIndex),
+      });
     }
     return;
   }
@@ -1810,6 +1921,14 @@ async function handlePadDown(pointerId, position, options = {}) {
 }
 
 function handlePadMove(pointerId, position) {
+  const sequenceStepPress = state.sequenceStepPressByPointer.get(pointerId);
+  if (sequenceStepPress) {
+    if (sequenceStepPress.editingPitch) {
+      updateSequenceStepPitchFromPointer(sequenceStepPress, position);
+    }
+    return;
+  }
+
   const draggedControl = state.controlDragByPointer.get(pointerId);
   if (draggedControl) {
     const topControl = getTopControlRegions(position.width)
@@ -1884,6 +2003,20 @@ function handlePadMove(pointerId, position) {
 }
 
 function handlePadUp(pointerId, buttons = 0) {
+  const sequenceStepPress = clearSequenceStepPress(pointerId);
+  if (sequenceStepPress) {
+    if (!sequenceStepPress.editingPitch) {
+      const currentPattern = getDisplayedSequencePattern();
+      setSequenceStepEnabled(
+        sequenceStepPress.stepIndex,
+        !currentPattern[sequenceStepPress.stepIndex],
+      );
+    } else {
+      schedulePadDraw();
+    }
+    return;
+  }
+
   state.controlDragByPointer?.delete(pointerId);
 
   if (state.mode === "solo") {
@@ -1939,6 +2072,14 @@ function handlePadUp(pointerId, buttons = 0) {
 }
 
 function handlePadCancel(pointerId) {
+  const sequenceStepPress = clearSequenceStepPress(pointerId);
+  if (sequenceStepPress) {
+    if (sequenceStepPress.editingPitch) {
+      schedulePadDraw();
+    }
+    return;
+  }
+
   state.controlDragByPointer?.delete(pointerId);
 
   if (state.mode === "solo") {
@@ -1970,6 +2111,16 @@ function handlePadCancel(pointerId) {
 }
 
 function handlePadLeave(pointerId, buttons = 0) {
+  if (state.sequenceStepPressByPointer?.has(pointerId)) {
+    if (buttons === 0) {
+      const sequenceStepPress = clearSequenceStepPress(pointerId);
+      if (sequenceStepPress?.editingPitch) {
+        schedulePadDraw();
+      }
+    }
+    return;
+  }
+
   if (state.controlDragByPointer?.has(pointerId)) {
     if (buttons === 0) {
       state.controlDragByPointer.delete(pointerId);
@@ -2017,6 +2168,10 @@ function drawPad() {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (const control of [...topControlRegions, ...bottomControlRegions]) {
+    const sequenceStepPress = control.action === "sequencer-step"
+      ? [...state.sequenceStepPressByPointer.values()]
+        .find((interaction) => interaction.stepIndex === control.stepIndex)
+      : null;
     const isActiveEdit = control.action === "edit-held" && state.interactionMode === "edit";
     const isDisabled = control.disabled === true;
     const isSequenceStep = control.action === "sequencer-step";
@@ -2025,8 +2180,10 @@ function drawPad() {
     const isSequenceLengthDisplay = control.action === "sequencer-length-display";
     const sequencePattern = isSequenceStep ? getDisplayedSequencePattern() : null;
     const sequenceLength = isSequenceStep ? getDisplayedSequenceLength() : 0;
+    const sequencePitchOffset = isSequenceStep ? getDisplayedSequencePitchOffset(control.stepIndex) : 0;
     const isStepOn = isSequenceStep ? sequencePattern[control.stepIndex] !== false : false;
     const isStepInRange = isSequenceStep ? control.stepIndex < sequenceLength : false;
+    const isEditingSequencePitch = isSequenceStep && sequenceStepPress?.editingPitch === true;
     const isPlayingSequenceStep = isSequenceStep
       && getDisplayedSequencePatternIndex() === getDisplayedPlaybackPatternIndex()
       && control.stepIndex === getDisplayedPlaybackStepIndex();
@@ -2039,7 +2196,7 @@ function drawPad() {
     ctx.fillStyle = isSequenceStep
       ? (
         isStepInRange
-          ? (isPlayingSequenceStep ? "#f4b3b3" : (isStepOn ? "#000" : "#fff"))
+          ? (isEditingSequencePitch ? "#f7d9a6" : (isPlayingSequenceStep ? "#f4b3b3" : (isStepOn ? "#000" : "#fff")))
           : "#dcdcdc"
       )
       : (
@@ -2157,9 +2314,21 @@ function drawPad() {
 
     ctx.fillStyle = isDisabled
       ? "#777"
-      : (isSequenceStep && isStepInRange && isStepOn && !isPlayingSequenceStep ? "#fff" : "#000");
+      : (isSequenceStep && isStepInRange && isStepOn && !isPlayingSequenceStep && !isEditingSequencePitch ? "#fff" : "#000");
     const label = isSequencePattern && !isUnlockedSequencePattern ? `${control.label}+` : control.label;
-    ctx.fillText(label, control.x + control.width / 2, control.y + control.height / 2);
+    if (isSequenceStep) {
+      ctx.font = '14px "Times New Roman", Times, serif';
+      ctx.fillText(label, control.x + control.width / 2, control.y + (control.height * 0.38));
+      ctx.font = '11px "Times New Roman", Times, serif';
+      ctx.fillText(
+        formatSequencePitchOffset(sequencePitchOffset),
+        control.x + control.width / 2,
+        control.y + (control.height * 0.72),
+      );
+      ctx.font = '16px "Times New Roman", Times, serif';
+    } else {
+      ctx.fillText(label, control.x + control.width / 2, control.y + control.height / 2);
+    }
   }
 
   for (const voice of state.holdVoices.values()) {
