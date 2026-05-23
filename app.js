@@ -529,6 +529,7 @@ function getTopControlRegions(width) {
       y: controlY,
       width: controlWidth,
       height: controlHeight,
+      disabled: !hasEditableHoldVoice(),
     },
   ];
 }
@@ -585,10 +586,13 @@ function getControlActionAtPosition(pointerPosition) {
     ...getBottomControlRegions(pointerPosition.width, pointerPosition.height),
   ];
   return controlsInPad.find((control) => (
+    !control.disabled
+    && (
     pointerPosition.x >= control.x
     && pointerPosition.x <= control.x + control.width
     && pointerPosition.y >= control.y
     && pointerPosition.y <= control.y + control.height
+    )
   )) ?? null;
 }
 
@@ -900,6 +904,27 @@ function getEditableHoldVoice() {
     return null;
   }
   return state.holdVoices.get(state.selectedHoldId) ?? null;
+}
+
+function hasEditableHoldVoice() {
+  return state.holdVoices.size > 0;
+}
+
+function openSequencerEditor() {
+  if (!hasEditableHoldVoice()) {
+    return false;
+  }
+
+  state.interactionMode = "edit";
+  if (state.lastInteractedHoldId !== null && state.holdVoices.has(state.lastInteractedHoldId)) {
+    state.selectedHoldId = state.lastInteractedHoldId;
+  } else {
+    state.selectedHoldId = [...state.holdVoices.keys()][state.holdVoices.size - 1] ?? null;
+    setLastInteractedHoldId(state.selectedHoldId);
+  }
+  state.topEffectView = "sequencer";
+  schedulePadDraw();
+  return true;
 }
 
 function getEffectTargetVoices() {
@@ -1691,8 +1716,7 @@ async function handlePadDown(pointerId, position, options = {}) {
       );
       setDistortionAmountForTargets(amount);
     } else if (controlAction.action === "sequencer") {
-      state.topEffectView = "sequencer";
-      schedulePadDraw();
+      openSequencerEditor();
     } else if (controlAction.action === "sequencer-back") {
       state.topEffectView = "main";
       schedulePadDraw();
@@ -1994,6 +2018,7 @@ function drawPad() {
   ctx.textBaseline = "middle";
   for (const control of [...topControlRegions, ...bottomControlRegions]) {
     const isActiveEdit = control.action === "edit-held" && state.interactionMode === "edit";
+    const isDisabled = control.disabled === true;
     const isSequenceStep = control.action === "sequencer-step";
     const isSequenceRate = control.action === "sequencer-rate";
     const isSequencePattern = control.action === "sequencer-pattern";
@@ -2020,7 +2045,7 @@ function drawPad() {
       : (
         isSequencePattern
           ? (isActiveSequencePattern ? "#ddd" : (isUnlockedSequencePattern ? "#fff" : "#f1f1f1"))
-          : ((isActiveEdit || isActiveSequenceRate || isSequenceLengthDisplay) ? "#ddd" : "#fff")
+          : (isDisabled ? "#dcdcdc" : ((isActiveEdit || isActiveSequenceRate || isSequenceLengthDisplay) ? "#ddd" : "#fff"))
       );
     ctx.strokeStyle = "#000";
     ctx.lineWidth = 1;
@@ -2130,7 +2155,9 @@ function drawPad() {
       });
     }
 
-    ctx.fillStyle = isSequenceStep && isStepInRange && isStepOn && !isPlayingSequenceStep ? "#fff" : "#000";
+    ctx.fillStyle = isDisabled
+      ? "#777"
+      : (isSequenceStep && isStepInRange && isStepOn && !isPlayingSequenceStep ? "#fff" : "#000");
     const label = isSequencePattern && !isUnlockedSequencePattern ? `${control.label}+` : control.label;
     ctx.fillText(label, control.x + control.width / 2, control.y + control.height / 2);
   }
